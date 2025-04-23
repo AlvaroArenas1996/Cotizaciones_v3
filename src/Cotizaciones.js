@@ -6,10 +6,10 @@ import './Cotizaciones.css';
 export default function Cotizaciones({ setView, setNegociacionActiva }) {
   const [mostrarNueva, setMostrarNueva] = useState(false);
 
-  // Callback para abrir portal de negociaciones con datos
+  // Callback para abrir detalle de cotización con datos
   const handleIrANegociacion = (venta, cotizacion, empresa) => {
     setNegociacionActiva({ venta, cotizacion, empresa });
-    setView('Portal de negociaciones');
+    setView('Detalle de cotizacion');
   };
 
   return (

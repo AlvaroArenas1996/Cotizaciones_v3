@@ -65,6 +65,13 @@ function CotizarProducto({ onCotizacionGuardada }) {
       }
       const numeroCotizacion = `COT-${nextNumber.toString().padStart(9, '0')}`;
 
+      // LOG: Mostrar productos antes de guardar
+      console.log('Productos a guardar en cotizacion:', productos);
+      // LOG: Mostrar cada producto_id seleccionado
+      productos.forEach((prod, idx) => {
+        console.log(`Producto[${idx}] producto_id:`, prod.producto_id, 'nombre_producto:', prod.nombre_producto);
+      });
+
       // 2. Insertar cotización con el número generado
       const { data: cotData, error: cotError } = await supabase.from('cotizaciones').insert([
         {
@@ -169,7 +176,12 @@ function CotizarProducto({ onCotizacionGuardada }) {
                 <tr key={idx} style={{ borderBottom: '1px solid #f0f0f0', background: idx % 2 === 0 ? '#fafcff' : '#fff' }}>
                   <td style={{ padding: '8px 6px', minWidth: 230 }}>
                     <ProductAutocomplete
-                      onSelect={p => handleChange(idx, 'producto_id', p.id_producto)}
+                      value={prod.producto_id}
+                      nombre={prod.nombre_producto}
+                      onSelect={p => {
+                        handleChange(idx, 'producto_id', p.id_producto);
+                        handleChange(idx, 'nombre_producto', p.nombre_producto);
+                      }}
                     />
                     {prod.nombre_producto && <div style={{ color: '#888', fontSize: 13 }}>{prod.nombre_producto}</div>}
                   </td>

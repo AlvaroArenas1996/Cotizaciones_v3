@@ -13,13 +13,11 @@ import './Sidebar.css';
 import Navbar from './Navbar';
 import './Navbar.css';
 import { supabase } from './supabaseClient';
-import PortalNegociaciones from './PortalNegociaciones';
+import DetalleNegociacion from './DetalleNegociacion';
 
 function App() {
   const [session, setSession] = useState(null);
-  // Estado de la vista principal, persistente con localStorage
-  const defaultView = localStorage.getItem('app_view') || 'home';
-  const [view, setView] = useState(defaultView);
+  const [view, setView] = useState('home');
   const [role, setRole] = useState('');
   const [negociacionActiva, setNegociacionActiva] = useState(null); // Para datos de la negociación
 
@@ -64,14 +62,11 @@ function App() {
     getSessionAndRole();
     // Escuchar cambios de sesión
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      console.log('[onAuthStateChange] Evento:', _event, session);
       // Evitar actualizar si el usuario no cambió
       setSession(prev => {
         if (prev?.user?.id === session?.user?.id) {
-          console.log('[onAuthStateChange] Usuario no cambió, no se reinicia view ni rol');
           return prev; // No actualizar el estado si el usuario es el mismo
         }
-        console.log('[onAuthStateChange] Usuario cambió, actualizando estados');
         return session;
       });
       if (session?.user?.id) {
@@ -122,11 +117,6 @@ function App() {
     };
   }, []);
 
-  // Guardar la vista activa en localStorage cada vez que cambie
-  useEffect(() => {
-    localStorage.setItem('app_view', view);
-  }, [view]);
-
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setSession(null);
@@ -160,13 +150,12 @@ function App() {
       </div>
       {view === 'home' || view === 'Inicio' ? <Home /> : null}
       {view === 'Configuración' && <UserRoleSwitcher onRoleChange={handleRoleChange} />}
+      {/* Portal de cotizaciones contiene todo el flujo de interacción */}
       {view === 'Portal de cotizaciones' && (
-        role === 'empresa'
-          ? <ResponderCotizaciones />
-          : <Cotizaciones setView={setView} setNegociacionActiva={setNegociacionActiva} />
+        <Cotizaciones setView={setView} setNegociacionActiva={setNegociacionActiva} />
       )}
-      {view === 'Portal de negociaciones' && (
-        <PortalNegociaciones negociacion={negociacionActiva} usuario={session?.user} />
+      {view === 'Detalle de cotizacion' && negociacionActiva && (
+        <DetalleNegociacion cotizacionId={negociacionActiva.cotizacion?.id || negociacionActiva.cotizacion_id || negociacionActiva?.id} onVolver={() => setView('Portal de cotizaciones')} usuario={session?.user} />
       )}
       {view === 'Gestión de productos' && role === 'empresa' && (
         <EditarPreciosPersonalizados key={view + '-' + role} tipoEmpresa="empresa" />

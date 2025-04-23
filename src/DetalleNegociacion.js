@@ -4,11 +4,12 @@ import HistorialMensajesProducto from './HistorialMensajesProducto';
 
 export default function DetalleNegociacion({ cotizacionId, onVolver, usuario }) {
   const [productos, setProductos] = useState([]);
-  const [mensajes, setMensajes] = useState({}); // { producto_id: { mensaje, usuario_id, fecha } }
-  const [mensajesEdit, setMensajesEdit] = useState({}); // { producto_id: mensaje }
+  const [mensajes, setMensajes] = useState({}); // { cotizacion_detalle_id: [{ mensaje, usuario_id, fecha }] }
+  const [mensajesEdit, setMensajesEdit] = useState({}); // { cotizacion_detalle_id: mensaje }
   const [guardando, setGuardando] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [productoMensajes, setProductoMensajes] = useState(null); // producto_id activo para historial
+  const [productoMensajes, setProductoMensajes] = useState(null); // cotizacion_detalle_id activo para historial
+  const [nuevosMensajes, setNuevosMensajes] = useState({});
 
   useEffect(() => {
     async function fetchDetalle() {
@@ -16,7 +17,7 @@ export default function DetalleNegociacion({ cotizacionId, onVolver, usuario }) 
       // Traer productos del detalle
       const { data: detalles, error } = await supabase
         .from('cotizacion_detalle')
-        .select('cotizacion_id, producto_id, alto, ancho')
+        .select('id, cotizacion_id, producto_id, alto, ancho')
         .eq('cotizacion_id', cotizacionId);
       if (error) {
         console.error('Error al obtener cotizacion_detalle:', error);
@@ -45,11 +46,13 @@ export default function DetalleNegociacion({ cotizacionId, onVolver, usuario }) 
       // Traer mensajes previos
       const { data: mensajesDb } = await supabase
         .from('detalle_producto_cliente')
-        .select('producto_id, mensaje, usuario_id, fecha')
+        .select('cotizacion_detalle_id, mensaje, usuario_id, fecha')
         .eq('cotizacion_id', cotizacionId);
+      // Agrupar mensajes por cotizacion_detalle_id como array
       const mensajesMap = {};
       (mensajesDb || []).forEach(m => {
-        mensajesMap[m.producto_id] = m;
+        if (!mensajesMap[m.cotizacion_detalle_id]) mensajesMap[m.cotizacion_detalle_id] = [];
+        mensajesMap[m.cotizacion_detalle_id].push(m);
       });
       setMensajes(mensajesMap);
       setMensajesEdit({});
@@ -58,33 +61,102 @@ export default function DetalleNegociacion({ cotizacionId, onVolver, usuario }) 
     fetchDetalle();
   }, [cotizacionId]);
 
-  const handleMensajeChange = (productoId, value) => {
-    setMensajesEdit(prev => ({ ...prev, [productoId]: value }));
+  useEffect(() => {
+    if (!cotizacionId || !usuario?.id) return;
+    const key = `mensajes_leidos_${cotizacionId}_ALL_${usuario.id}`;
+    localStorage.setItem(key, new Date().toISOString());
+  }, [cotizacionId, usuario]);
+
+  // Optimización: checkMensajesNuevos ahora hace una sola consulta para todos los productos
+  async function checkMensajesNuevos() {
+    let nuevos = {};
+    if (!productos.length) {
+      setNuevosMensajes({});
+      return;
+    }
+    const detIds = productos.map(prod => prod.id);
+    const { data: mensajes } = await supabase
+      .from('detalle_producto_cliente')
+      .select('id, cotizacion_detalle_id, usuario_id, fecha')
+      .eq('cotizacion_id', cotizacionId)
+      .in('cotizacion_detalle_id', detIds)
+      .neq('usuario_id', usuario?.id);
+    for (const prod of productos) {
+      const key = `mensajes_leidos_${cotizacionId}_${prod.id}_${usuario?.id}`;
+      let ultimaLectura = localStorage.getItem(key) || '1970-01-01';
+      const nuevosMensajes = (mensajes || []).filter(m =>
+        m.cotizacion_detalle_id === prod.id &&
+        m.fecha > ultimaLectura
+      );
+      nuevos[prod.id] = nuevosMensajes.length > 0;
+    }
+    setNuevosMensajes(nuevos);
+  }
+
+  useEffect(() => {
+    if (productos.length > 0 && usuario?.id) checkMensajesNuevos();
+  }, [productos, cotizacionId, usuario]);
+
+  useEffect(() => {
+    if (!cotizacionId) return;
+    const channel = supabase
+      .channel('mensajes-realtime-' + cotizacionId)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'detalle_producto_cliente',
+          filter: `cotizacion_id=eq.${cotizacionId}`,
+        },
+        (payload) => {
+          // Cuando hay un nuevo mensaje, se chequean de nuevo
+          checkMensajesNuevos();
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [cotizacionId, productos, usuario]);
+
+  const handleMensajeChange = (cotizacionDetalleId, value) => {
+    setMensajesEdit(prev => ({ ...prev, [cotizacionDetalleId]: value }));
   };
 
-  const handleGuardarMensaje = async (productoId) => {
+  const handleGuardarMensaje = async (cotizacionDetalleId) => {
     setGuardando(true);
-    const mensaje = mensajesEdit[productoId] || '';
+    const mensaje = mensajesEdit[cotizacionDetalleId] || '';
     await supabase.from('detalle_producto_cliente').upsert({
       cotizacion_id: cotizacionId,
-      producto_id: productoId,
+      cotizacion_detalle_id: cotizacionDetalleId,
       mensaje,
       usuario_id: usuario?.id,
       fecha: new Date().toISOString(),
     });
-    // Refrescar mensajes
+    // Refrescar mensajes SOLO para el producto actualizado (como array)
     const { data: mensajesDb } = await supabase
       .from('detalle_producto_cliente')
-      .select('producto_id, mensaje, usuario_id, fecha')
-      .eq('cotizacion_id', cotizacionId);
-    const mensajesMap = {};
-    (mensajesDb || []).forEach(m => {
-      mensajesMap[m.producto_id] = m;
-    });
-    setMensajes(mensajesMap);
-    setMensajesEdit(prev => ({ ...prev, [productoId]: '' }));
+      .select('cotizacion_detalle_id, mensaje, usuario_id, fecha')
+      .eq('cotizacion_id', cotizacionId)
+      .eq('cotizacion_detalle_id', cotizacionDetalleId);
+    setMensajes(prev => ({ ...prev, [cotizacionDetalleId]: mensajesDb || [] }));
+    setMensajesEdit(prev => ({ ...prev, [cotizacionDetalleId]: '' }));
     setGuardando(false);
   };
+
+  function handleAbrirMensajes(cotizacionDetalleId) {
+    // Marca como leído en localStorage y actualiza el estado en tiempo real
+    if (usuario?.id && cotizacionId && cotizacionDetalleId) {
+      const key = `mensajes_leidos_${cotizacionId}_${cotizacionDetalleId}_${usuario.id}`;
+      localStorage.setItem(key, new Date().toISOString());
+      setNuevosMensajes(prev => ({
+        ...prev,
+        [cotizacionDetalleId]: false
+      }));
+    }
+    setProductoMensajes(cotizacionDetalleId);
+  }
 
   if (loading) return <div style={{ padding: 40 }}>Cargando detalle...</div>;
 
@@ -92,7 +164,7 @@ export default function DetalleNegociacion({ cotizacionId, onVolver, usuario }) 
     return (
       <HistorialMensajesProducto
         cotizacionId={cotizacionId}
-        productoId={productoMensajes}
+        cotizacionDetalleId={productoMensajes}
         onVolver={() => setProductoMensajes(null)}
         usuario={usuario}
       />
@@ -110,23 +182,24 @@ export default function DetalleNegociacion({ cotizacionId, onVolver, usuario }) 
           <tr style={{ background: '#f5f7fa' }}>
             <th style={{ padding: '10px 8px', textAlign: 'left' }}>Producto</th>
             <th style={{ padding: '10px 8px', textAlign: 'left' }}>Dimensiones</th>
-            <th style={{ padding: '10px 8px', textAlign: 'left' }}>Valor</th>
             <th style={{ padding: '10px 8px', textAlign: 'left' }}>Acción</th>
           </tr>
         </thead>
         <tbody>
           {productos.map((prod, idx) => (
-            <tr key={prod.producto_id + '-' + prod.alto + '-' + prod.ancho + '-' + idx} style={{ borderBottom: '1px solid #f0f0f0' }}>
+            <tr key={prod.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
               <td style={{ padding: 8 }}>{prod.nombre_producto}</td>
               <td style={{ padding: 8 }}>{prod.ancho} x {prod.alto}</td>
-              <td style={{ padding: 8 }}>{prod.valor || '-'}</td>
               <td style={{ padding: 8, minWidth: 180 }}>
                 <button
                   style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 18px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
-                  onClick={() => setProductoMensajes(prod.producto_id)}
+                  onClick={() => handleAbrirMensajes(prod.id)}
                 >
-                  Diseño Gráfico
+                  Registro de Mensajes
                 </button>
+                <span style={{ marginLeft: 12 }}>
+                  {nuevosMensajes[prod.id] ? <span style={{ color: '#e67e22', fontWeight: 600 }}>Nuevos Mensajes</span> : 'Sin mensajes nuevos'}
+                </span>
               </td>
             </tr>
           ))}

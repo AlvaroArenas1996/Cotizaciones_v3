@@ -19,37 +19,85 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
   const cotizacionesPorPagina = 10;
   const [totalCotizaciones, setTotalCotizaciones] = useState(0);
 
+  const [role, setRole] = useState('');
+
+  // Estados para mensajes nuevos
+  const [tieneNuevosMensajes, setTieneNuevosMensajes] = React.useState({});
+
+  // Estados para usuario autenticado
+  const [usuario, setUsuario] = useState(null);
+
+  // useEffect para cargar rol y evitar fetchCotizaciones hasta tener el rol definido
+  useEffect(() => {
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) return;
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', session.user.id)
+        .single();
+      if (profile?.role) setRole(profile.role);
+      else setRole('cliente'); // fallback para evitar quedarse indefinido
+      setUsuario(session?.user || null);
+    })();
+  }, []);
+
   const fetchCotizaciones = useCallback(async () => {
     setLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user?.id) throw new Error('No autenticado');
-      // 1. Obtener total para paginación
-      const { count } = await supabase
-        .from('cotizaciones')
-        .select('*', { count: 'exact', head: true })
-        .eq('cliente_id', session.user.id);
-      setTotalCotizaciones(count || 0);
-      // 2. Obtener cotizaciones paginadas + respuestas (ofertas) y detalles
-      const fromIdx = (pagina - 1) * cotizacionesPorPagina;
-      const toIdx = fromIdx + cotizacionesPorPagina - 1;
-      const { data: cotizacionesData, error: cotizacionesError } = await supabase
-        .from('cotizaciones')
-        .select('*, respuestas_cotizacion(*), cotizacion_detalle(*)')
-        .eq('cliente_id', session.user.id)
-        .order('fecha', { ascending: false })
-        .range(fromIdx, toIdx);
-      if (cotizacionesError) throw cotizacionesError;
-      setCotizaciones(cotizacionesData || []);
-      // Procesar detalles y respuestas para mantener la estructura anterior
-      const detallesObj = {};
-      const respuestasObj = {};
-      let empresaIds = new Set();
-      for (const cot of cotizacionesData || []) {
-        detallesObj[cot.id] = cot.cotizacion_detalle || [];
-        respuestasObj[cot.id] = cot.respuestas_cotizacion || [];
-        (cot.respuestas_cotizacion || []).forEach(r => empresaIds.add(r.empresa_id));
+      let cotizacionesData = [], ventasArr = [], detallesObj = {}, respuestasObj = {}, empresaIds = new Set();
+      if (role === 'empresa') {
+        // Empresas: ver cotizaciones asignadas (ventas donde empresa_id = usuario.id)
+        const { data: ventasDataRaw, error: ventasError } = await supabase
+          .from('ventas')
+          .select('*, cotizaciones(*, respuestas_cotizacion(*), cotizacion_detalle(*))')
+          .eq('empresa_id', session.user.id);
+        ventasArr = ventasDataRaw || [];
+        cotizacionesData = ventasArr.map(v => v.cotizaciones).filter(Boolean);
+        // Procesar detalles y respuestas
+        for (const v of ventasArr) {
+          if (v.cotizaciones) {
+            detallesObj[v.cotizaciones.id] = v.cotizaciones.cotizacion_detalle || [];
+            respuestasObj[v.cotizaciones.id] = v.cotizaciones.respuestas_cotizacion || [];
+            (v.cotizaciones.respuestas_cotizacion || []).forEach(r => empresaIds.add(r.empresa_id));
+          }
+        }
+      } else {
+        // Clientes: igual que antes
+        const { count } = await supabase
+          .from('cotizaciones')
+          .select('*', { count: 'exact', head: true })
+          .eq('cliente_id', session.user.id);
+        setTotalCotizaciones(count || 0);
+        const fromIdx = (pagina - 1) * cotizacionesPorPagina;
+        const toIdx = fromIdx + cotizacionesPorPagina - 1;
+        const { data: cotizacionesRaw, error: cotizacionesError } = await supabase
+          .from('cotizaciones')
+          .select('*, respuestas_cotizacion(*), cotizacion_detalle(*)')
+          .eq('cliente_id', session.user.id)
+          .order('fecha', { ascending: false })
+          .range(fromIdx, toIdx);
+        cotizacionesData = cotizacionesRaw || [];
+        for (const cot of cotizacionesData) {
+          detallesObj[cot.id] = cot.cotizacion_detalle || [];
+          respuestasObj[cot.id] = cot.respuestas_cotizacion || [];
+          (cot.respuestas_cotizacion || []).forEach(r => empresaIds.add(r.empresa_id));
+        }
+        // Obtener ventas del usuario (por sus cotizaciones)
+        const cotIds = (cotizacionesData || []).map(cot => cot.id);
+        if (cotIds.length > 0) {
+          const { data: ventasData } = await supabase
+            .from('ventas')
+            .select('*')
+            .in('cotizacion_id', cotIds);
+          ventasArr = ventasData || [];
+        }
       }
+      setCotizaciones(cotizacionesData || []);
+      setVentas(ventasArr);
       setDetalles(detallesObj);
       setRespuestas(respuestasObj);
       // Obtener nombres de empresas
@@ -62,18 +110,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
         empresasData?.forEach(e => { empresasMap[e.id] = e.nombre; });
         setEmpresasInfo(empresasMap);
       }
-      // Obtener ventas del usuario (por sus cotizaciones)
-      const cotIds = (cotizacionesData || []).map(cot => cot.id);
-      let ventasArr = [];
-      if (cotIds.length > 0) {
-        const { data: ventasData } = await supabase
-          .from('ventas')
-          .select('*')
-          .in('cotizacion_id', cotIds);
-        ventasArr = ventasData || [];
-      }
-      setVentas(ventasArr);
-      // Obtener nombres de productos (opcional, si quieres mostrar nombre en vez de id)
+      // Obtener nombres de productos
       let productoIds = new Set();
       Object.values(detallesObj).flat().forEach(det => productoIds.add(det.producto_id));
       if (productoIds.size > 0) {
@@ -86,16 +123,18 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
         setProductosInfo(info);
       }
     } catch (e) {
-      // Manejar error
       setCotizaciones([]);
       setVentas([]);
     }
     setLoading(false);
-  }, [pagina]);
+  }, [pagina, role]);
 
+  // Solo buscar cotizaciones cuando el rol está definido
   useEffect(() => {
+    if (!role) return; // Esperar a tener el rol
     fetchCotizaciones();
-  }, [fetchCotizaciones, recargarTrigger]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchCotizaciones, recargarTrigger, role]);
 
   // Consulta de precios por empresa y producto para el modal
   const fetchPreciosPorEmpresa = useCallback(async (cotizacion, respuestasCot, detallesCot) => {
@@ -249,6 +288,56 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
     setModalOfertas({ abierto: true, cotizacion: cot, precios, detalleAsignada: ofertaAsignada });
   };
 
+  // --- Mensajes por cotización: buscar si hay mensajes nuevos por producto (optimizado) ---
+  React.useEffect(() => {
+    if (!usuario?.id) return;
+    async function checkMensajes() {
+      let nuevos = {};
+      // Reunir todos los productos de todas las cotizaciones
+      let allDetalles = [];
+      for (const cot of cotizaciones) {
+        const detallesCot = detalles[cot.id] || [];
+        for (const det of detallesCot) {
+          allDetalles.push({ cotId: cot.id, detId: det.id });
+        }
+      }
+      if (allDetalles.length === 0) {
+        setTieneNuevosMensajes({});
+        return;
+      }
+      // Obtener todos los mensajes recientes de todos los productos en una sola consulta
+      const cotIds = [...new Set(allDetalles.map(x => x.cotId))];
+      const detIds = allDetalles.map(x => x.detId);
+      const { data: mensajes } = await supabase
+        .from('detalle_producto_cliente')
+        .select('id, cotizacion_id, cotizacion_detalle_id, usuario_id, fecha')
+        .in('cotizacion_id', cotIds)
+        .in('cotizacion_detalle_id', detIds)
+        .neq('usuario_id', usuario.id);
+      // Procesar por producto
+      for (const { cotId, detId } of allDetalles) {
+        const key = `mensajes_leidos_${cotId}_${detId}_${usuario.id}`;
+        let ultimaLectura = localStorage.getItem(key) || '1970-01-01';
+        // Solo mensajes después de la última lectura y escritos por otro usuario
+        const nuevosMensajes = (mensajes || []).filter(m =>
+          m.cotizacion_id === cotId &&
+          m.cotizacion_detalle_id === detId &&
+          m.fecha > ultimaLectura
+        );
+        nuevos[detId] = nuevosMensajes.length > 0;
+      }
+      setTieneNuevosMensajes(nuevos);
+    }
+    if (cotizaciones.length > 0) checkMensajes();
+  }, [cotizaciones, usuario, detalles]);
+
+  // Nuevo: Determina si hay mensajes nuevos por cotización considerando todos sus productos
+  function tieneMensajesNuevosEnCotizacion(cotId) {
+    const detallesCot = detalles[cotId] || [];
+    // Si algún producto tiene mensajes nuevos, retorna true
+    return detallesCot.some(det => tieneNuevosMensajes[det.id]);
+  }
+
   if (loading) return <div>Cargando historial...</div>;
 
   return (
@@ -262,6 +351,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
             <th>Venta</th>
             <th>Monto asignado</th>
             <th>Acciones</th>
+            <th>Mensajes</th>
           </tr>
         </thead>
         <tbody>
@@ -311,7 +401,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                       style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 12px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
                       onClick={() => handleIrANegociacion(venta, cot, empresasInfo[ofertaAsignada?.empresa_id] ? { id: ofertaAsignada?.empresa_id, nombre: empresasInfo[ofertaAsignada.empresa_id] } : null)}
                     >
-                      Ir a Portal de Negociaciones
+                      Interactuar con la Empresa
                     </button>
                   ) : ofertaAsignada ? (
                     <button
@@ -395,6 +485,11 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                       {cot.publicando ? 'Publicando...' : 'Publicar'}
                     </button>
                   )}
+                </td>
+                <td>
+                  {tieneMensajesNuevosEnCotizacion(cot.id)
+                    ? <span style={{ color: '#e67e22', fontWeight: 600 }}>Nuevos Mensajes</span>
+                    : 'Sin mensajes nuevos'}
                 </td>
               </tr>
             );

@@ -4,7 +4,6 @@ import './Sidebar.css';
 const baseMenuItems = [
   { icon: '🏠', label: 'Inicio' },
   { icon: '📄', label: 'Portal de cotizaciones' },
-  { icon: '💬', label: 'Portal de negociaciones' },
 ];
 
 const empresaMenu = { icon: '🛠️', label: 'Gestión de productos', role: 'empresa' };

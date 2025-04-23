@@ -1,12 +1,17 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
 
-export default function ProductAutocomplete({ onSelect }) {
-  const [query, setQuery] = useState('');
+export default function ProductAutocomplete({ value, nombre, onSelect }) {
+  const [query, setQuery] = useState(nombre || '');
   const [suggestions, setSuggestions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const debounceRef = useRef();
+
+  // Mantén sincronizado el input con el nombre seleccionado desde fuera
+  useEffect(() => {
+    setQuery(nombre || '');
+  }, [nombre]);
 
   // Buscar productos por nombre (ilike para coincidencia parcial, máx 8 resultados)
   const fetchSuggestions = async (value) => {
@@ -33,10 +38,10 @@ export default function ProductAutocomplete({ onSelect }) {
   };
 
   const handleSelect = (producto) => {
+    if (onSelect) onSelect(producto);
     setQuery(producto.nombre_producto);
     setShowDropdown(false);
     setSuggestions([]);
-    if (onSelect) onSelect(producto);
   };
 
   return (
