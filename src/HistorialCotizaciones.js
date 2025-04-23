@@ -220,7 +220,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
       console.log('Resultado rechazar:', rechazarRes);
       // 3. Insertar registro en la tabla de ventas
       const monto_total = respuestaAsignada?.monto || 0;
-      const comision = Math.round(monto_total * 0.05); // 5% de comisión ejemplo
+      const comision = Math.round(monto_total * 0.02); // 5% de comisión ejemplo
       const monto_empresa = monto_total - comision;
       const ventaRes = await supabase.from('ventas').insert([
         {
