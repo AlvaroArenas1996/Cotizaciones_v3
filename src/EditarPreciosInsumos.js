@@ -94,16 +94,20 @@ function EditarPreciosInsumos() {
       setError('El precio debe ser un número válido y mayor a 0.');
       return;
     }
+    // Construye el payload solo con los campos válidos
+    const payload = {
+      id_empresa: empresaId,
+      id_producto,
+      valor_actualizado,
+      nombre_empresa: nombreEmpresa
+    };
+    // Elimina nombre_producto si accidentalmente se incluyera
+    delete payload.nombre_producto;
     // UPSERT en precios_actualizados
     const { error } = await supabase.from('precios_actualizados').upsert([
-      {
-        id_empresa: empresaId,
-        id_producto,
-        valor_actualizado,
-        nombre_empresa: nombreEmpresa
-      }
+      payload
     ], { onConflict: ['id_empresa', 'id_producto'] });
-    if (error) setError('Error al actualizar el precio personalizado');
+    if (error) setError('Error al actualizar el precio personalizado: ' + error.message);
     else setSuccess('Precio personalizado actualizado correctamente');
   };
 

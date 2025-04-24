@@ -12,18 +12,38 @@ function EmpresaForm({ userId, tipoEmpresa, onSuccess }) {
     e.preventDefault();
     setLoading(true);
     setError('');
-    const { error } = await supabase.from('empresas').upsert([
-      {
-        id: userId,
-        nombre,
-        rut,
-        direccion,
-        tipo_empresa: tipoEmpresa,
-      },
-    ]);
-    setLoading(false);
-    if (error) setError('Error al guardar datos de empresa');
-    else onSuccess();
+    console.log('[EmpresaForm] userId:', userId);
+    console.log('[EmpresaForm] nombre:', nombre);
+    console.log('[EmpresaForm] rut:', rut);
+    console.log('[EmpresaForm] direccion:', direccion);
+    console.log('[EmpresaForm] tipoEmpresa:', tipoEmpresa);
+    const payload = {
+      id: userId,
+      nombre,
+      rut,
+      direccion,
+      tipo_empresa: tipoEmpresa,
+    };
+    // Elimina nombre_producto si accidentalmente se incluyera
+    delete payload.nombre_producto;
+    console.log('[EmpresaForm] payload a insertar:', payload);
+    try {
+      const { data, error, status, statusText } = await supabase.from('empresas').upsert([
+        payload
+      ]);
+      console.log('[EmpresaForm] respuesta supabase:', { data, error, status, statusText });
+      setLoading(false);
+      if (error) {
+        console.error('[EmpresaForm] ERROR SUPABASE:', error, error.message, error.details, error.hint);
+        setError('Error al guardar datos de empresa: ' + error.message + (error.details ? ' Detalles: ' + error.details : ''));
+      } else {
+        onSuccess();
+      }
+    } catch (e) {
+      setLoading(false);
+      console.error('[EmpresaForm] EXCEPCION:', e);
+      setError('Excepción inesperada al guardar datos de empresa: ' + (e.message || e));
+    }
   };
 
   return (

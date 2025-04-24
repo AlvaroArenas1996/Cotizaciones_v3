@@ -45,14 +45,14 @@ export default function ProductAutocomplete({ value, nombre, onSelect }) {
   };
 
   return (
-    <div style={{ position: 'relative', width: 300 }}>
+    <div style={{ position: 'relative', width: '100%' }}>
       <input
         type="text"
         value={query}
         onChange={handleChange}
         placeholder="Buscar producto por nombre..."
         autoComplete="off"
-        style={{ width: '100%', padding: 8, borderRadius: 4, border: '1px solid #ccc' }}
+        style={{ width: '100%', padding: 8, borderRadius: 4, border: '1px solid #ccc', fontSize: 16, boxSizing: 'border-box', height: 38, minWidth: 0, maxWidth: '100%' }}
         onFocus={() => query && setShowDropdown(true)}
       />
       {showDropdown && suggestions.length > 0 && (
