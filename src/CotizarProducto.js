@@ -73,27 +73,20 @@ function CotizarProducto({ onCotizacionGuardada }) {
         .eq('id', session.user.id)
         .single();
       if (profile?.role) userRole = profile.role;
-      // 1. Generar número de cotización incremental ÚNICO por cliente
-      let nextNumber = 1;
+      // 1. Obtener el último número de cotización global (sin filtrar por cliente)
       const { data: ultimaCot } = await supabase
         .from('cotizaciones')
         .select('numero_cotizacion')
-        .eq('cliente_id', session.user.id)
-        .order('id', { ascending: false })
+        .order('fecha', { ascending: false })
         .limit(1)
         .single();
+      let nextNumber = 1;
       if (ultimaCot && ultimaCot.numero_cotizacion) {
         const match = ultimaCot.numero_cotizacion.match(/COT-(\d+)/);
         if (match) nextNumber = parseInt(match[1], 10) + 1;
       }
       const numeroCotizacion = `COT-${nextNumber.toString().padStart(9, '0')}`;
-
-      // LOG: Mostrar productos antes de guardar
-      console.log('Productos a guardar en cotizacion:', productos);
-      productos.forEach((prod, idx) => {
-        console.log(`Producto[${idx}] producto_id:`, prod.producto_id, 'nombre_producto:', prod.nombre_producto, 'id_tinta:', prod.id_tinta);
-      });
-
+      
       // 2. Insertar cotización con el número generado
       const { data: cotData, error: cotError } = await supabase.from('cotizaciones').insert([
         {

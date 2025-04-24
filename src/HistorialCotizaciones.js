@@ -96,6 +96,35 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
           ventasArr = ventasData || [];
         }
       }
+      // Obtener nombres de productos
+      let productoIds = new Set();
+      Object.values(detallesObj).flat().forEach(det => productoIds.add(det.producto_id));
+      if (productoIds.size > 0) {
+        // Obtener también los nombres de tinta para los detalles
+        // 1. Traer detalles con JOIN a tintas
+        const { data: detallesConTinta } = await supabase
+          .from('cotizacion_detalle')
+          .select('id, cotizacion_id, producto_id, alto, ancho, id_tinta, tintas(nombre)')
+          .in('cotizacion_id', cotizacionesData.map(cot => cot.id));
+        // 2. Construir nuevo detallesObj con nombre_tinta
+        if (detallesConTinta) {
+          const detallesPorCot = {};
+          for (const det of detallesConTinta) {
+            const cotId = det.cotizacion_id;
+            if (!detallesPorCot[cotId]) detallesPorCot[cotId] = [];
+            detallesPorCot[cotId].push({ ...det, nombre_tinta: det.tintas?.nombre || '-' });
+          }
+          detallesObj = detallesPorCot;
+        }
+        // Obtener nombres de productos
+        const { data: productosData } = await supabase
+          .from('productos')
+          .select('id_producto, nombre_producto')
+          .in('id_producto', Array.from(productoIds));
+        const info = {};
+        productosData?.forEach(p => { info[p.id_producto] = p.nombre_producto; });
+        setProductosInfo(info);
+      }
       setCotizaciones(cotizacionesData || []);
       setVentas(ventasArr);
       setDetalles(detallesObj);
@@ -109,18 +138,6 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
         const empresasMap = {};
         empresasData?.forEach(e => { empresasMap[e.id] = e.nombre; });
         setEmpresasInfo(empresasMap);
-      }
-      // Obtener nombres de productos
-      let productoIds = new Set();
-      Object.values(detallesObj).flat().forEach(det => productoIds.add(det.producto_id));
-      if (productoIds.size > 0) {
-        const { data: productosData } = await supabase
-          .from('productos')
-          .select('id_producto, nombre_producto')
-          .in('id_producto', Array.from(productoIds));
-        const info = {};
-        productosData?.forEach(p => { info[p.id_producto] = p.nombre_producto; });
-        setProductosInfo(info);
       }
     } catch (e) {
       setCotizaciones([]);
@@ -136,46 +153,59 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchCotizaciones, recargarTrigger, role]);
 
+  // Dado un producto y tipo de tinta, busca el precio en precios_actualizados o, si no existe, en productos según el tipo de tinta
+  async function obtenerPrecioUnitario(id_empresa, id_producto, id_tinta) {
+    // Busca el precio personalizado para ese producto y tinta
+    const { data: preciosPersonalizados, error: errorPersonalizado } = await supabase
+      .from('precios_actualizados')
+      .select('valor_actualizado')
+      .eq('id_empresa', id_empresa)
+      .eq('id_producto', id_producto)
+      .eq('id_tinta', id_tinta)
+      .limit(1);
+    if (preciosPersonalizados && preciosPersonalizados.length > 0) {
+      return Number(preciosPersonalizados[0].valor_actualizado);
+    }
+    // Si no hay precio personalizado, buscar en productos según el tipo de tinta
+    const tintaMap = {
+      'SOLVENTADAS': 'precio_solvente',
+      'ECO SOLVENTE': 'precio_ecosolvente',
+      'UV': 'precio_uv',
+      'LATEX': 'precio_latex',
+      'RESINA': 'precio_resina',
+    };
+    // Obtener el nombre de tinta
+    let tintaNombre = null;
+    if (id_tinta) {
+      const { data: tintaData, error: errorTinta } = await supabase.from('tintas').select('nombre').eq('id', id_tinta).single();
+      if (tintaData && tintaData.nombre) {
+        tintaNombre = tintaData.nombre.trim().toUpperCase();
+      }
+    }
+    if (tintaNombre && tintaMap[tintaNombre]) {
+      const { data: prod, error: errorProd } = await supabase.from('productos').select(tintaMap[tintaNombre]).eq('id_producto', id_producto).single();
+      if (prod && prod[tintaMap[tintaNombre]] !== undefined) {
+        return Number(prod[tintaMap[tintaNombre]]);
+      }
+    }
+    // Si no hay precio específico, retornar 0
+    return 0;
+  }
+
   // Consulta de precios por empresa y producto para el modal
   const fetchPreciosPorEmpresa = useCallback(async (cotizacion, respuestasCot, detallesCot) => {
     // 1. Identificar todas las empresas y productos involucrados
     const empresaIds = respuestasCot.map(r => r.empresa_id);
-    const productoIds = detallesCot.map(d => d.producto_id);
-
-    // 2. Traer todos los precios personalizados de una sola vez
-    const { data: preciosPersonalizados } = await supabase
-      .from('precios_actualizados')
-      .select('id_empresa, id_producto, valor_actualizado')
-      .in('id_empresa', empresaIds)
-      .in('id_producto', productoIds);
-
-    // 3. Traer todos los precios base de los productos
-    const { data: productosBase } = await supabase
-      .from('productos')
-      .select('id_producto, precio')
-      .in('id_producto', productoIds);
-
-    // 4. Indexar los precios para acceso rápido
-    const preciosPersonalizadosMap = {};
-    for (const p of preciosPersonalizados || []) {
-      preciosPersonalizadosMap[`${p.id_empresa}_${p.id_producto}`] = Number(p.valor_actualizado);
-    }
-    const preciosBaseMap = {};
-    for (const p of productosBase || []) {
-      preciosBaseMap[p.id_producto] = Number(p.precio);
-    }
-
-    // 5. Construir el resultado
+    // 2. Para cada empresa y cada detalle, buscar precio personalizado según producto y tinta
     const preciosPorEmpresa = {};
     for (const resp of respuestasCot) {
       preciosPorEmpresa[resp.empresa_id] = {};
       for (const det of detallesCot) {
-        const key = `${resp.empresa_id}_${det.producto_id}`;
-        let precio = preciosPersonalizadosMap[key];
-        if (precio === undefined) {
-          precio = preciosBaseMap[det.producto_id] ?? 0;
+        let precio = null;
+        if (det.id_tinta) {
+          precio = await obtenerPrecioUnitario(resp.empresa_id, det.producto_id, det.id_tinta);
         }
-        preciosPorEmpresa[resp.empresa_id][det.producto_id] = precio;
+        preciosPorEmpresa[resp.empresa_id][det.producto_id] = precio !== null ? precio : 0;
       }
     }
     return preciosPorEmpresa;
@@ -205,9 +235,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
         .eq('cotizacion_id', modalOfertas.cotizacion.id)
         .eq('empresa_id', empresaId)
         .select('*');
-      console.log('Resultado asignar:', respuestasAsignadas, errorAsignada);
       if (errorAsignada || !respuestasAsignadas || respuestasAsignadas.length === 0) {
-        console.error('Error al asignar oferta:', errorAsignada, respuestasAsignadas);
         alert('Error al asignar oferta');
         return;
       }
@@ -217,7 +245,6 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
         .update({ estado: 'rechazada' })
         .eq('cotizacion_id', modalOfertas.cotizacion.id)
         .neq('empresa_id', empresaId);
-      console.log('Resultado rechazar:', rechazarRes);
       // 3. Insertar registro en la tabla de ventas
       const monto_total = respuestaAsignada?.monto || 0;
       const comision = Math.round(monto_total * 0.02); // 5% de comisión ejemplo
@@ -233,9 +260,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
           respuesta_id: respuestaAsignada?.id || null
         }
       ]);
-      console.log('Resultado venta:', ventaRes);
       if (ventaRes.error) {
-        console.error('Error al registrar la venta:', ventaRes.error);
         alert('Error al registrar la venta: ' + ventaRes.error.message);
         return;
       }
@@ -244,7 +269,6 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
         fetchCotizaciones();
       }, 400);
     } catch (e) {
-      console.error('Error inesperado en handleAceptarOferta:', e);
       alert('Error inesperado al aceptar la oferta');
     }
   };
@@ -338,6 +362,121 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
     return detallesCot.some(det => tieneNuevosMensajes[det.id]);
   }
 
+  // Dado un producto y empresa, busca el precio actualizado si existe; si no, el precio base correcto
+  async function obtenerPrecioUnitarioPublicar(id_empresa, id_producto, id_tinta) {
+    // 1. Busca el precio actualizado para ese producto, empresa y tinta
+    const { data: preciosPersonalizados } = await supabase
+      .from('precios_actualizados')
+      .select('valor_actualizado')
+      .eq('id_empresa', id_empresa)
+      .eq('id_producto', id_producto)
+      .eq('id_tinta', id_tinta)
+      .limit(1);
+    if (preciosPersonalizados && preciosPersonalizados.length > 0 && preciosPersonalizados[0].valor_actualizado !== null) {
+      return Number(preciosPersonalizados[0].valor_actualizado);
+    }
+    // 2. Si no hay precio actualizado, buscar el precio base correcto de productos según tipo de tinta
+    let tintaNombre = null;
+    if (id_tinta) {
+      const { data: tintaData } = await supabase.from('tintas').select('nombre').eq('id', id_tinta).single();
+      if (tintaData && tintaData.nombre) {
+        tintaNombre = tintaData.nombre.trim().toUpperCase();
+      }
+    }
+    const tintaMap = {
+      'SOLVENTADAS': 'precio_solvente',
+      'SOLVENTADA': 'precio_solvente',
+      'ECO SOLVENTE': 'precio_ecosolvente',
+      'ECO-SOLVENTADAS': 'precio_ecosolvente',
+      'UV': 'precio_uv',
+      'LATEX': 'precio_latex',
+      'RESINA': 'precio_resina',
+    };
+    let campoPrecio = tintaNombre && tintaMap[tintaNombre] ? tintaMap[tintaNombre] : null;
+    if (campoPrecio) {
+      const { data: prod } = await supabase.from('productos').select(`${campoPrecio}, precio`).eq('id_producto', id_producto).single();
+      if (prod && prod[campoPrecio] !== undefined && prod[campoPrecio] !== null && !isNaN(Number(prod[campoPrecio])) && Number(prod[campoPrecio]) > 0) {
+        return Number(prod[campoPrecio]);
+      }
+      if (prod && prod.precio !== undefined && prod.precio !== null && !isNaN(Number(prod.precio)) && Number(prod.precio) > 0) {
+        return Number(prod.precio);
+      }
+    } else {
+      const { data: prodBase } = await supabase.from('productos').select('precio').eq('id_producto', id_producto).single();
+      if (prodBase && prodBase.precio !== undefined && prodBase.precio !== null && !isNaN(Number(prodBase.precio)) && Number(prodBase.precio) > 0) {
+        return Number(prodBase.precio);
+      }
+    }
+    return 0;
+  }
+
+  // --- NUEVO: Hook para obtener precios unitarios para el modal de detalle ---
+  const obtenerPreciosUnitariosDetalle = useCallback(async (empresa_id, detallesCot) => {
+    const precios = [];
+    for (const det of detallesCot) {
+      const precio = await obtenerPrecioUnitarioPublicar(empresa_id, det.producto_id, det.id_tinta);
+      precios.push(precio);
+    }
+    return precios;
+  }, []);
+
+  // --- En el render del modal, usa un estado para los precios unitarios ---
+  const [preciosUnitariosModal, setPreciosUnitariosModal] = useState({});
+
+  useEffect(() => {
+    if (modalOfertas.abierto && modalOfertas.cotizacion && detalles[modalOfertas.cotizacion.id]) {
+      const respuestasCot = respuestas[modalOfertas.cotizacion.id] || [];
+      respuestasCot.forEach(async (resp) => {
+        const detallesCot = detalles[modalOfertas.cotizacion.id] || [];
+        const precios = await obtenerPreciosUnitariosDetalle(resp.empresa_id, detallesCot);
+        setPreciosUnitariosModal(prev => ({ ...prev, [resp.empresa_id]: precios }));
+      });
+    }
+  }, [modalOfertas.abierto, modalOfertas.cotizacion, detalles, respuestas]);
+
+  // Lógica de publicación
+  async function handlePublicar(cot) {
+    if (cot.publicando) return;
+    setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: true } : c));
+    try {
+      // 1. Publicar la cotización
+      await supabase.from('cotizaciones')
+        .update({ estado: 'publicado' })
+        .eq('id', cot.id);
+      // 2. Buscar empresas de publicidad
+      const { data: empresasPublicidad } = await supabase
+        .from('empresas')
+        .select('id, tipo_empresa')
+        .ilike('tipo_empresa', '%publicidad%');
+      // 3. Buscar detalles
+      const { data: detallesCot } = await supabase
+        .from('cotizacion_detalle')
+        .select('*')
+        .eq('cotizacion_id', cot.id);
+      // 4. Para cada empresa, calcular monto y crear oferta
+      for (const empresa of empresasPublicidad || []) {
+        let montoTotal = 0;
+        for (const det of detallesCot || []) {
+          let precio = await obtenerPrecioUnitarioPublicar(empresa.id, det.producto_id, det.id_tinta);
+          montoTotal += ((Number(det.alto) * Number(det.ancho)) / 10000) * precio;
+        }
+        // Insertar oferta automática
+        await supabase.from('respuestas_cotizacion').insert([
+          {
+            cotizacion_id: cot.id,
+            empresa_id: empresa.id,
+            monto: Math.round(montoTotal),
+            fecha: new Date().toISOString(),
+            estado: 'pendiente'
+          }
+        ]);
+      }
+      fetchCotizaciones();
+    } finally {
+      setTimeout(() => setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: false } : c)), 4000);
+    }
+  }
+
   if (loading) return <div>Cargando historial...</div>;
 
   return (
@@ -422,65 +561,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                     <button
                       style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 12px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
                       disabled={cot.publicando}
-                      onClick={async () => {
-                        if (cot.publicando) return;
-                        setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: true } : c));
-                        try {
-                          // 1. Publicar la cotización
-                          await supabase.from('cotizaciones')
-                            .update({ estado: 'publicado' })
-                            .eq('id', cot.id);
-                          // 2. Buscar empresas de publicidad
-                          const { data: empresasPublicidad } = await supabase
-                            .from('empresas')
-                            .select('id, tipo_empresa')
-                            .ilike('tipo_empresa', '%publicidad%');
-                          // 3. Buscar detalles
-                          const { data: detallesCot } = await supabase
-                            .from('cotizacion_detalle')
-                            .select('*')
-                            .eq('cotizacion_id', cot.id);
-                          // 4. Para cada empresa, calcular monto y crear oferta
-                          for (const empresa of empresasPublicidad || []) {
-                            let montoTotal = 0;
-                            for (const det of detallesCot || []) {
-                              // Busca precio personalizado
-                              let precio = 0;
-                              const { data: preciosPersonalizados } = await supabase
-                                .from('precios_actualizados')
-                                .select('valor_actualizado')
-                                .eq('id_empresa', empresa.id)
-                                .eq('id_producto', det.producto_id)
-                                .limit(1);
-                              if (preciosPersonalizados && preciosPersonalizados.length > 0) {
-                                precio = Number(preciosPersonalizados[0].valor_actualizado);
-                              } else {
-                                // Precio base
-                                const { data: prodBase } = await supabase
-                                  .from('productos')
-                                  .select('precio')
-                                  .eq('id_producto', det.producto_id)
-                                  .single();
-                                precio = prodBase ? Number(prodBase.precio) : 0;
-                              }
-                              montoTotal += ((Number(det.alto) * Number(det.ancho)) / 10000) * precio;
-                            }
-                            // Insertar oferta automática
-                            await supabase.from('respuestas_cotizacion').insert([
-                              {
-                                cotizacion_id: cot.id,
-                                empresa_id: empresa.id,
-                                monto: Math.round(montoTotal),
-                                fecha: new Date().toISOString(),
-                                estado: 'pendiente'
-                              }
-                            ]);
-                          }
-                          fetchCotizaciones();
-                        } finally {
-                          setTimeout(() => setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: false } : c)), 4000);
-                        }
-                      }}
+                      onClick={() => handlePublicar(cot)}
                     >
                       {cot.publicando ? 'Publicando...' : 'Publicar'}
                     </button>
@@ -534,15 +615,14 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                 return (
                   <div style={{ minWidth: 220 }}>
                     <div><b>Empresa:</b> {empresasInfo[asignada.empresa_id] || asignada.empresa_id}</div>
-                    <div><b>Monto:</b> {asignada.monto !== undefined && asignada.monto !== null
-                      ? asignada.monto.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
-                      : '-'}</div>
+                    <div><b>Monto:</b> {asignada.monto !== undefined && asignada.monto !== null ? asignada.monto.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 }) : '-'}</div>
                     <div><b>Estado:</b> {asignada.estado}</div>
                     <div style={{ marginTop: 16 }}>
                       <table style={{ width: '100%', marginTop: 8, fontSize: 14, borderCollapse: 'collapse' }}>
                         <thead>
                           <tr style={{ background: '#f5f5f5' }}>
                             <th style={{ textAlign: 'left', padding: 4 }}>Producto</th>
+                            <th style={{ textAlign: 'left', padding: 4 }}>Tipo de tinta</th>
                             <th style={{ textAlign: 'right', padding: 4 }}>Precio unitario</th>
                             <th style={{ textAlign: 'right', padding: 4 }}>Ancho</th>
                             <th style={{ textAlign: 'right', padding: 4 }}>Largo</th>
@@ -552,8 +632,8 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                         <tbody>
                           {(detalles[modalOfertas.cotizacion.id] || []).map((det, i) => {
                             let precioUnit = null;
-                            if (modalOfertas.precios && modalOfertas.precios[asignada.empresa_id] && modalOfertas.precios[asignada.empresa_id][det.producto_id] !== undefined) {
-                              precioUnit = modalOfertas.precios[asignada.empresa_id][det.producto_id];
+                            if (preciosUnitariosModal[asignada.empresa_id] && preciosUnitariosModal[asignada.empresa_id][i] !== undefined) {
+                              precioUnit = preciosUnitariosModal[asignada.empresa_id][i];
                             }
                             let ancho = '-';
                             let largo = '-';
@@ -573,6 +653,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                             return (
                               <tr key={i}>
                                 <td style={{ padding: 4 }}>{productosInfo[det.producto_id] || det.producto_id}</td>
+                                <td style={{ padding: 4 }}>{det.nombre_tinta || det.tinta_nombre || '-'}</td>
                                 <td style={{ padding: 4, textAlign: 'right' }}>{precioUnit !== null ? precioUnit.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 }) : '-'}</td>
                                 <td style={{ padding: 4, textAlign: 'right' }}>{ancho !== '-' ? ancho : '-'}</td>
                                 <td style={{ padding: 4, textAlign: 'right' }}>{largo !== '-' ? largo : '-'}</td>
@@ -645,6 +726,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                                     <thead>
                                       <tr style={{ background: '#f5f5f5' }}>
                                         <th style={{ textAlign: 'left', padding: 4 }}>Producto</th>
+                                        <th style={{ textAlign: 'left', padding: 4 }}>Tipo de tinta</th>
                                         <th style={{ textAlign: 'right', padding: 4 }}>Precio unitario</th>
                                         <th style={{ textAlign: 'right', padding: 4 }}>Ancho</th>
                                         <th style={{ textAlign: 'right', padding: 4 }}>Largo</th>
@@ -654,8 +736,8 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                                     <tbody>
                                       {(detalles[modalOfertas.cotizacion.id] || []).map((det, i) => {
                                         let precioUnit = null;
-                                        if (modalOfertas.precios && modalOfertas.precios[oferta.empresa_id] && modalOfertas.precios[oferta.empresa_id][det.producto_id] !== undefined) {
-                                          precioUnit = modalOfertas.precios[oferta.empresa_id][det.producto_id];
+                                        if (preciosUnitariosModal[oferta.empresa_id] && preciosUnitariosModal[oferta.empresa_id][i] !== undefined) {
+                                          precioUnit = preciosUnitariosModal[oferta.empresa_id][i];
                                         }
                                         let ancho = '-';
                                         let largo = '-';
@@ -675,6 +757,7 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                                         return (
                                           <tr key={i}>
                                             <td style={{ padding: 4 }}>{productosInfo[det.producto_id] || det.producto_id}</td>
+                                            <td style={{ padding: 4 }}>{det.nombre_tinta || det.tinta_nombre || '-'}</td>
                                             <td style={{ padding: 4, textAlign: 'right' }}>{precioUnit !== null ? precioUnit.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 }) : '-'}</td>
                                             <td style={{ padding: 4, textAlign: 'right' }}>{ancho !== '-' ? ancho : '-'}</td>
                                             <td style={{ padding: 4, textAlign: 'right' }}>{largo !== '-' ? largo : '-'}</td>
