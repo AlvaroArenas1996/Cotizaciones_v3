@@ -463,24 +463,45 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
       // 5. Para cada empresa habilitada, calcular monto y crear oferta automática
       for (const empresa of empresasHabilitadas) {
         let montoTotal = 0;
+        let puedeCotizar = true;
         for (const det of detallesCot) {
-          // Usar la función correcta para calcular el precio unitario
-          const precioUnitario = await obtenerPrecioUnitarioPublicar(empresa.id, det.producto_id, det.id_tinta);
-          montoTotal += ((Number(det.alto) * Number(det.ancho)) / 10000) * precioUnitario;
-        }
-        await supabase.from('respuestas_cotizacion').insert([
-          {
-            cotizacion_id: cot.id,
-            empresa_id: empresa.id,
-            monto: Math.round(montoTotal),
-            fecha: new Date().toISOString(),
-            estado: 'pendiente'
+          // Buscar precio personalizado y habilitado para ese producto/tinta
+          const { data: precioPersonalizado, error: logError } = await supabase
+            .from('precios_actualizados')
+            .select('valor_actualizado, habilitado')
+            .eq('id_empresa', empresa.id)
+            .eq('id_producto', det.producto_id)
+            .eq('id_tinta', det.id_tinta ?? 6)
+            .single();
+          // LOG para depuración
+          console.log('[PUBLICAR] Empresa:', empresa.id, empresa.tipo_empresa, 'Producto:', det.producto_id, 'Tinta:', det.id_tinta ?? 6, 'Precio:', precioPersonalizado, 'Error:', logError);
+          if (!precioPersonalizado || !precioPersonalizado.habilitado) {
+            puedeCotizar = false;
+            break;
           }
-        ]);
+          const precio = Number(precioPersonalizado.valor_actualizado);
+          if (!precio || isNaN(precio) || precio <= 0) {
+            puedeCotizar = false;
+            break;
+          }
+          montoTotal += ((Number(det.alto) * Number(det.ancho)) / 10000) * precio;
+        }
+        if (puedeCotizar) {
+          await supabase.from('respuestas_cotizacion').insert([
+            {
+              cotizacion_id: cot.id,
+              empresa_id: empresa.id,
+              monto: Math.round(montoTotal),
+              fecha: new Date().toISOString(),
+              estado: 'pendiente'
+            }
+          ]);
+        }
       }
-      fetchCotizaciones();
     } finally {
-      setTimeout(() => setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: false } : c)), 4000);
+      // Refresca inmediatamente tras publicar para actualizar botones y estado visual
+      await fetchCotizaciones();
+      setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: false } : c));
     }
   }
 

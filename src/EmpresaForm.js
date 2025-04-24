@@ -55,7 +55,7 @@ function EmpresaForm({ userId, tipoEmpresa, onSuccess }) {
             for (const prod of productos) {
               const tintasAsociadas = productosTintas?.filter(pt => pt.id_producto === prod.id_producto) || [];
               if (tintasAsociadas.length === 0) {
-                // Sin tintas: insertar con id_tinta=6
+                // Sin tintas: insertar con id_tinta=6 y habilitado: false
                 bulkPayload.push({
                   id_empresa: payload.id,
                   id_producto: prod.id_producto,
@@ -63,10 +63,10 @@ function EmpresaForm({ userId, tipoEmpresa, onSuccess }) {
                   valor_actualizado: prod.precio ?? 1,
                   updated_at: new Date().toISOString(),
                   nombre_empresa: payload.nombre,
-                  habilitado: true
+                  habilitado: false // DESHABILITADO POR DEFECTO
                 });
               } else {
-                // Con tintas: insertar uno por cada tinta asociada
+                // Con tintas: insertar uno por cada tinta asociada, todos deshabilitados por defecto
                 for (const tinta of tintasAsociadas) {
                   bulkPayload.push({
                     id_empresa: payload.id,
@@ -75,7 +75,7 @@ function EmpresaForm({ userId, tipoEmpresa, onSuccess }) {
                     valor_actualizado: prod.precio ?? 1,
                     updated_at: new Date().toISOString(),
                     nombre_empresa: payload.nombre,
-                    habilitado: true
+                    habilitado: false // DESHABILITADO POR DEFECTO
                   });
                 }
               }

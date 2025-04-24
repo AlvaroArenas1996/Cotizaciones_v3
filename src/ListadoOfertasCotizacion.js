@@ -25,33 +25,38 @@ export default function ListadoOfertasCotizacion({ cotizacionId, detalles, onAce
       const ofertasArr = [];
       for (const empresa of empresas) {
         let montoTotal = 0;
+        let puedeCotizar = true;
+        console.log('[LOG] Empresa:', empresa.nombre, 'ID:', empresa.id);
         for (const det of detalles) {
-          // Lógica personalizada por empresa (igual que en ResponderCotizaciones.js)
           let precio = 0;
-          // 1. Buscar precio personalizado
-          const { data: precioPersonalizado } = await supabase
+          console.log('[LOG] Revisando producto:', det.producto_id, 'tinta:', det.id_tinta ?? 6);
+          const { data: precioPersonalizado, error: logError } = await supabase
             .from('precios_actualizados')
-            .select('valor_actualizado')
+            .select('valor_actualizado, habilitado')
             .eq('id_empresa', empresa.id)
             .eq('id_producto', det.producto_id)
+            .eq('id_tinta', det.id_tinta ?? 6)
             .single();
-          if (precioPersonalizado) {
-            precio = Number(precioPersonalizado.valor_actualizado);
-          } else {
-            // 2. Tomar precio base
-            const { data: prod } = await supabase
-              .from('productos')
-              .select('precio')
-              .eq('id_producto', det.producto_id)
-              .single();
-            precio = prod ? Number(prod.precio) : 0;
+          console.log('[LOG] Resultado precios_actualizados:', precioPersonalizado, 'Error:', logError);
+          if (!precioPersonalizado || !precioPersonalizado.habilitado) {
+            console.log('[LOG] Empresa', empresa.nombre, 'NO puede cotizar este producto/tinta.');
+            puedeCotizar = false;
+            break;
           }
-          montoTotal += precio * Number(det.alto) * Number(det.ancho) / 10000; // ejemplo: precio por m2
+          precio = Number(precioPersonalizado.valor_actualizado);
+          if (!precio || isNaN(precio) || precio <= 0) {
+            console.log('[LOG] Empresa', empresa.nombre, 'NO vende (precio inválido) el producto/tinta.');
+            puedeCotizar = false;
+            break;
+          }
+          montoTotal += precio * Number(det.alto) * Number(det.ancho) / 10000;
         }
+        console.log('[LOG] Resultado final empresa', empresa.nombre, 'puedeCotizar:', puedeCotizar, 'monto:', montoTotal);
         ofertasArr.push({
           empresaId: empresa.id,
           nombre: empresa.nombre,
-          monto: Math.round(montoTotal),
+          monto: puedeCotizar ? Math.round(montoTotal) : null,
+          puedeCotizar
         });
       }
       setOfertas(ofertasArr);
@@ -76,13 +81,24 @@ export default function ListadoOfertasCotizacion({ cotizacionId, detalles, onAce
         </thead>
         <tbody>
           {ofertas.map(oferta => (
-            <tr key={oferta.empresaId}>
+            <tr key={oferta.empresaId} style={!oferta.puedeCotizar ? { opacity: 0.5, background: '#f8d7da' } : {}}>
               <td>{oferta.nombre}</td>
-              <td>${oferta.monto}</td>
+              <td>{oferta.puedeCotizar ? `$${oferta.monto}` : <span style={{ color: 'red' }}>No disponible</span>}</td>
               <td>
-                <button onClick={() => setVisualizar(oferta.empresaId)}>Visualizar cotización</button>
-                <button onClick={() => onAceptar(oferta.empresaId)} style={{ marginLeft: 8 }}>Aceptar</button>
-                <button onClick={() => onRechazar(oferta.empresaId)} style={{ marginLeft: 8 }}>Rechazar</button>
+                <button
+                  onClick={() => setVisualizar(oferta.empresaId)}
+                  disabled={!oferta.puedeCotizar}
+                >Visualizar cotización</button>
+                <button
+                  onClick={() => onAceptar(oferta.empresaId)}
+                  style={{ marginLeft: 8 }}
+                  disabled={!oferta.puedeCotizar}
+                >Aceptar</button>
+                <button
+                  onClick={() => onRechazar(oferta.empresaId)}
+                  style={{ marginLeft: 8 }}
+                  disabled={!oferta.puedeCotizar}
+                >Rechazar</button>
               </td>
             </tr>
           ))}
