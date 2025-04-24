@@ -37,7 +37,60 @@ function EmpresaForm({ userId, tipoEmpresa, onSuccess }) {
         console.error('[EmpresaForm] ERROR SUPABASE:', error, error.message, error.details, error.hint);
         setError('Error al guardar datos de empresa: ' + error.message + (error.details ? ' Detalles: ' + error.details : ''));
       } else {
+        // Guardar el id de empresa en localStorage para toda la app
+        if (payload.id) {
+          localStorage.setItem('empresa_id', payload.id);
+          console.log('[EmpresaForm] Guardado en localStorage empresa_id:', payload.id);
+        }
         onSuccess();
+        // --- NUEVO: Insertar todos los productos en precios_actualizados con id_tinta=6 si no tienen tintas asociadas ---
+        try {
+          // 1. Obtener todos los productos
+          const { data: productos, error: productosError } = await supabase.from('productos').select('*');
+          if (!productosError && productos && productos.length > 0) {
+            // 2. Obtener relación productos_tintas
+            const { data: productosTintas, error: ptError } = await supabase.from('productos_tintas').select('id_producto, id_tinta');
+            // 3. Para cada producto, verificar si tiene tintas asociadas
+            const bulkPayload = [];
+            for (const prod of productos) {
+              const tintasAsociadas = productosTintas?.filter(pt => pt.id_producto === prod.id_producto) || [];
+              if (tintasAsociadas.length === 0) {
+                // Sin tintas: insertar con id_tinta=6
+                bulkPayload.push({
+                  id_empresa: payload.id,
+                  id_producto: prod.id_producto,
+                  id_tinta: 6,
+                  valor_actualizado: prod.precio ?? 1,
+                  updated_at: new Date().toISOString(),
+                  nombre_empresa: payload.nombre,
+                  habilitado: true
+                });
+              } else {
+                // Con tintas: insertar uno por cada tinta asociada
+                for (const tinta of tintasAsociadas) {
+                  bulkPayload.push({
+                    id_empresa: payload.id,
+                    id_producto: prod.id_producto,
+                    id_tinta: tinta.id_tinta,
+                    valor_actualizado: prod.precio ?? 1,
+                    updated_at: new Date().toISOString(),
+                    nombre_empresa: payload.nombre,
+                    habilitado: true
+                  });
+                }
+              }
+            }
+            if (bulkPayload.length > 0) {
+              const { error: preciosError } = await supabase.from('precios_actualizados').upsert(bulkPayload, { onConflict: ['id_empresa', 'id_producto', 'id_tinta'] });
+              if (preciosError) {
+                console.error('[EmpresaForm] Error al insertar precios_actualizados masivo:', preciosError);
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[EmpresaForm] EXCEPCION al insertar precios_actualizados masivo:', e);
+        }
+        // --- FIN NUEVO ---
       }
     } catch (e) {
       setLoading(false);

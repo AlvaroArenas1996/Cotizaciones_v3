@@ -117,6 +117,27 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const setEmpresaId = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        // Buscar empresa cuyo id coincida con el usuario
+        const { data: empresa, error } = await supabase
+          .from('empresas')
+          .select('id')
+          .eq('id', session.user.id)
+          .single();
+        if (empresa && empresa.id) {
+          localStorage.setItem('empresa_id', empresa.id);
+          console.log('[App] empresa_id guardado en localStorage', empresa.id);
+        } else {
+          console.warn('[App] No se encontró empresa para este usuario.', error);
+        }
+      }
+    };
+    setEmpresaId();
+  }, []);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setSession(null);

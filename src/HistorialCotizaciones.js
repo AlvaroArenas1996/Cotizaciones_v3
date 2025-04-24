@@ -446,21 +446,28 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
       // 2. Buscar empresas de publicidad
       const { data: empresasPublicidad } = await supabase
         .from('empresas')
-        .select('id, tipo_empresa')
+        .select('id, tipo_empresa, estado')
         .ilike('tipo_empresa', '%publicidad%');
-      // 3. Buscar detalles
+      // 3. Filtrar solo empresas habilitadas
+      const empresasHabilitadas = (empresasPublicidad || []).filter(e => e.estado === 'Habilitada para vender');
+      if (!empresasHabilitadas.length) {
+        alert('No hay empresas habilitadas para vender. No se realizará cotización automática.');
+        setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: false } : c));
+        return;
+      }
+      // 4. Buscar detalles
       const { data: detallesCot } = await supabase
         .from('cotizacion_detalle')
         .select('*')
         .eq('cotizacion_id', cot.id);
-      // 4. Para cada empresa, calcular monto y crear oferta
-      for (const empresa of empresasPublicidad || []) {
+      // 5. Para cada empresa habilitada, calcular monto y crear oferta automática
+      for (const empresa of empresasHabilitadas) {
         let montoTotal = 0;
-        for (const det of detallesCot || []) {
-          let precio = await obtenerPrecioUnitarioPublicar(empresa.id, det.producto_id, det.id_tinta);
-          montoTotal += ((Number(det.alto) * Number(det.ancho)) / 10000) * precio;
+        for (const det of detallesCot) {
+          // Usar la función correcta para calcular el precio unitario
+          const precioUnitario = await obtenerPrecioUnitarioPublicar(empresa.id, det.producto_id, det.id_tinta);
+          montoTotal += ((Number(det.alto) * Number(det.ancho)) / 10000) * precioUnitario;
         }
-        // Insertar oferta automática
         await supabase.from('respuestas_cotizacion').insert([
           {
             cotizacion_id: cot.id,

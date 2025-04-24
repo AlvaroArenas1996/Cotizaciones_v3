@@ -9,6 +9,8 @@ function EditarPreciosProductos() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [empresas, setEmpresas] = useState([]);
+  const [empresaMsg, setEmpresaMsg] = useState('');
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -41,6 +43,14 @@ function EditarPreciosProductos() {
       setLoading(false);
     };
     fetchAll();
+  }, []);
+
+  useEffect(() => {
+    const fetchEmpresas = async () => {
+      const { data, error } = await supabase.from('empresas').select('id, nombre, estado');
+      if (!error && data) setEmpresas(data);
+    };
+    fetchEmpresas();
   }, []);
 
   const handlePrecioChange = (id_producto, nuevoPrecio) => {
@@ -82,12 +92,79 @@ function EditarPreciosProductos() {
     setSuccess('Tintas actualizadas para el producto');
   };
 
+  const toggleEstadoEmpresa = async (empresaId, estadoActual) => {
+    setEmpresaMsg('');
+    const nuevoEstado = estadoActual === 'Habilitada para vender' ? 'Deshabilitada para vender' : 'Habilitada para vender';
+    const { error } = await supabase.from('empresas').update({ estado: nuevoEstado }).eq('id', empresaId);
+    if (!error) {
+      setEmpresas(empresas.map(e => e.id === empresaId ? { ...e, estado: nuevoEstado } : e));
+      setEmpresaMsg('Estado de empresa actualizado');
+    } else {
+      setEmpresaMsg('Error al actualizar estado');
+    }
+  };
+
   if (loading) return <div>Cargando...</div>;
   if (error) return <div style={{ color: 'red' }}>{error}</div>;
 
   return (
     <div style={{ background: '#f8fafc', borderRadius: 12, padding: 32, boxShadow: '0 2px 12px rgba(0,0,0,0.06)', maxWidth: 900, margin: '32px auto' }}>
-      <h3 style={{ marginBottom: 24, fontWeight: 700 }}>Gestionar tintas permitidas por producto</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <h3 style={{ fontWeight: 700, marginBottom: 0 }}>Editar precios personalizados de productos</h3>
+        <button
+          style={{
+            padding: '10px 32px',
+            background: '#2563eb',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            fontWeight: 600,
+            fontSize: 16,
+            cursor: 'pointer',
+            marginLeft: 12
+          }}
+        >
+          Gestión de empresas (always visible)
+        </button>
+      </div>
+      <div style={{ marginBottom: 32, background: '#fbbf24', padding: 16, borderRadius: 8 }}>
+        <h3 style={{ marginBottom: 12 }}>Empresas de Publicidad Gráfica</h3>
+        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.03)' }}>
+          <thead>
+            <tr style={{ background: '#f1f5f9', borderBottom: '2px solid #e2e8f0' }}>
+              <th style={{ width: 300, padding: '10px 6px', fontWeight: 600, textAlign: 'left' }}>Empresa</th>
+              <th style={{ width: 200, padding: '10px 6px', fontWeight: 600, textAlign: 'left' }}>Estado</th>
+              <th style={{ width: 200, padding: '10px 6px', fontWeight: 600, textAlign: 'left' }}>Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {empresas.map(emp => (
+              <tr key={emp.id} style={{ borderBottom: '1px solid #f1f5f9', background: '#fff' }}>
+                <td style={{ padding: '8px 6px' }}>{emp.nombre}</td>
+                <td style={{ padding: '8px 6px' }}>{emp.estado}</td>
+                <td style={{ padding: '8px 6px' }}>
+                  <button
+                    onClick={() => toggleEstadoEmpresa(emp.id, emp.estado)}
+                    style={{
+                      padding: '6px 18px',
+                      background: emp.estado === 'Habilitada para vender' ? '#e11d48' : '#059669',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 6,
+                      fontWeight: 600,
+                      fontSize: 15,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {emp.estado === 'Habilitada para vender' ? 'Deshabilitar' : 'Habilitar'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {empresaMsg && <div style={{ color: empresaMsg.includes('Error') ? 'red' : '#059669', marginTop: 10 }}>{empresaMsg}</div>}
+      </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.03)' }}>
         <thead>
           <tr style={{ background: '#f1f5f9', borderBottom: '2px solid #e2e8f0' }}>

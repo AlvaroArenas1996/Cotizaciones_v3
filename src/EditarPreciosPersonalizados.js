@@ -116,12 +116,13 @@ function EditarPreciosPersonalizados({ tipoEmpresa }) {
   const handleGuardar = async (id_producto, id_tinta, precioFinal) => {
     setError('');
     setSuccess('');
-    console.log('[handleGuardar] Click en guardar:', { id_producto, id_tinta, precioFinal, empresaId, habilitado: habilitadoPrecios[id_producto]?.[id_tinta] });
-    // Permite id_tinta == null para productos sin tinta
-    if (!empresaId || !id_producto || id_tinta == null || isNaN(precioFinal) || precioFinal <= 0 || habilitadoPrecios[id_producto]?.[id_tinta] === false) {
-      setError(habilitadoPrecios[id_producto]?.[id_tinta] === false ? 'No puedes guardar porque la venta está deshabilitada.' : 'El precio debe ser mayor a 0');
-      setShowModal(true); // Mostrar modal de error
-      setTimeout(() => setShowModal(false), 1500); // Ocultar modal tras 1.5s
+    // Si el producto es servicio, usa id_tinta = 6
+    const idTintaFinal = (id_tinta === null || id_tinta === undefined || id_tinta === -1) ? 6 : id_tinta;
+    console.log('[handleGuardar] Click en guardar:', { id_producto, id_tinta: idTintaFinal, precioFinal, empresaId, habilitado: habilitadoPrecios[id_producto]?.[idTintaFinal] });
+    if (!empresaId || !id_producto || isNaN(precioFinal) || precioFinal <= 0 || habilitadoPrecios[id_producto]?.[idTintaFinal] === false) {
+      setError(habilitadoPrecios[id_producto]?.[idTintaFinal] === false ? 'No puedes guardar porque la venta está deshabilitada.' : 'El precio debe ser mayor a 0');
+      setShowModal(true);
+      setTimeout(() => setShowModal(false), 1500);
       console.log('[handleGuardar] BLOQUEADO por validación');
       return;
     }
@@ -129,15 +130,15 @@ function EditarPreciosPersonalizados({ tipoEmpresa }) {
       const payload = {
         id_empresa: empresaId,
         id_producto,
+        id_tinta: idTintaFinal,
         valor_actualizado: precioFinal,
         updated_at: new Date().toISOString(),
         nombre_empresa: nombreEmpresa
       };
-      if (id_tinta != null) payload.id_tinta = Number(id_tinta);
       console.log('[handleGuardar] Payload a enviar:', payload);
       const { error, data } = await supabase.from('precios_actualizados').upsert([
         payload
-      ], { onConflict: id_tinta != null ? ['id_empresa', 'id_producto', 'id_tinta'] : ['id_empresa', 'id_producto'] });
+      ], { onConflict: ['id_empresa', 'id_producto', 'id_tinta'] });
       console.log('[handleGuardar] Supabase response:', { error, data });
       if (error) {
         setError('Error al actualizar el precio personalizado: ' + error.message);
@@ -151,15 +152,16 @@ function EditarPreciosPersonalizados({ tipoEmpresa }) {
           .eq('id_empresa', empresaId);
         if (!preciosError) {
           const preciosObj = {};
+          const habilitadoObj = {};
           preciosData.forEach(p => {
+            const key = p.id_tinta; // Siempre usar el valor real de id_tinta (incluido 6)
             if (!preciosObj[p.id_producto]) preciosObj[p.id_producto] = {};
-            preciosObj[p.id_producto][p.id_tinta] = {
-              precio: p.valor_actualizado,
-              updated_at: p.updated_at,
-              habilitado: p.habilitado
-            };
+            if (!habilitadoObj[p.id_producto]) habilitadoObj[p.id_producto] = {};
+            preciosObj[p.id_producto][key] = { precio: p.valor_actualizado, updated_at: p.updated_at, habilitado: p.habilitado };
+            habilitadoObj[p.id_producto][key] = p.habilitado;
           });
           setPrecios(preciosObj);
+          setHabilitadoPrecios(habilitadoObj);
         }
       }
     } catch (e) {
@@ -169,15 +171,14 @@ function EditarPreciosPersonalizados({ tipoEmpresa }) {
   };
 
   const handleToggleVenta = async (id_producto, id_tinta) => {
-    const current = habilitadoPrecios[id_producto]?.[id_tinta] ?? false;
+    const key = (id_tinta === null || id_tinta === undefined || id_tinta === -1) ? 6 : id_tinta;
+    const current = habilitadoPrecios[id_producto]?.[key] ?? false;
     const nuevoEstado = !current;
-
     // Busca el valor_actualizado actual o el precio por defecto
-    let valor_actualizado = precios[id_producto]?.[id_tinta]?.precio;
+    let valor_actualizado = precios[id_producto]?.[key]?.precio;
     if (valor_actualizado == null) {
-      // Busca precio por defecto según tinta
       const producto = productos.find(p => p.id_producto === id_producto);
-      const tintaObj = tintas.find(t => t.id === id_tinta);
+      const tintaObj = key !== 6 ? tintas.find(t => t.id === key) : null;
       if (producto && tintaObj) {
         if (tintaObj.nombre?.toLowerCase().includes('solvent')) valor_actualizado = producto.precio_solvente;
         else if (tintaObj.nombre?.toLowerCase().includes('eco')) valor_actualizado = producto.precio_ecosolvente;
@@ -185,66 +186,54 @@ function EditarPreciosPersonalizados({ tipoEmpresa }) {
         else if (tintaObj.nombre?.toLowerCase().includes('latex')) valor_actualizado = producto.precio_latex;
         else if (tintaObj.nombre?.toLowerCase().includes('resina')) valor_actualizado = producto.precio_resina;
         else valor_actualizado = producto.precio;
+      } else {
+        valor_actualizado = producto?.precio ?? 1;
       }
     }
     if (valor_actualizado == null) valor_actualizado = 1;
-
-    console.log('[handleToggleVenta] Payload:', {
-      id_empresa: empresaId,
-      id_producto,
-      id_tinta,
-      valor_actualizado,
-      habilitado: nuevoEstado,
-      updated_at: new Date().toISOString(),
-      nombre_empresa: nombreEmpresa
-    });
-
     setHabilitadoPrecios(prev => ({
       ...prev,
       [id_producto]: {
         ...prev[id_producto],
-        [id_tinta]: nuevoEstado
+        [key]: nuevoEstado
       }
     }));
-
     const { error, data } = await supabase.from('precios_actualizados').upsert([
       {
         id_empresa: empresaId,
         id_producto,
-        id_tinta,
+        id_tinta: key,
         valor_actualizado,
         habilitado: nuevoEstado,
         updated_at: new Date().toISOString(),
         nombre_empresa: nombreEmpresa
       }
     ], { onConflict: ['id_empresa', 'id_producto', 'id_tinta'] });
-    console.log('[handleToggleVenta] Supabase response:', { error, data });
-
     if (error) {
       setError('Error al actualizar el estado de venta: ' + error.message);
       setHabilitadoPrecios(prev => ({
         ...prev,
         [id_producto]: {
           ...prev[id_producto],
-          [id_tinta]: current
+          [key]: current
         }
       }));
       return;
     }
-    // Refresca precios para reflejar el cambio real
+    // Refresca precios
     const { data: preciosData, error: preciosError } = await supabase
       .from('precios_actualizados')
       .select('id_producto, id_tinta, valor_actualizado, updated_at, habilitado')
       .eq('id_empresa', empresaId);
-    console.log('[handleToggleVenta] Refreshed precios_actualizados:', { preciosData, preciosError });
     if (!preciosError) {
       const preciosObj = {};
       const habilitadoObj = {};
       preciosData.forEach(p => {
+        const k = p.id_tinta; // Siempre usar el valor real de id_tinta (incluido 6)
         if (!preciosObj[p.id_producto]) preciosObj[p.id_producto] = {};
         if (!habilitadoObj[p.id_producto]) habilitadoObj[p.id_producto] = {};
-        preciosObj[p.id_producto][p.id_tinta] = { precio: p.valor_actualizado, updated_at: p.updated_at, habilitado: p.habilitado };
-        habilitadoObj[p.id_producto][p.id_tinta] = p.habilitado;
+        preciosObj[p.id_producto][k] = { precio: p.valor_actualizado, updated_at: p.updated_at, habilitado: p.habilitado };
+        habilitadoObj[p.id_producto][k] = p.habilitado;
       });
       setPrecios(preciosObj);
       setHabilitadoPrecios(habilitadoObj);
@@ -372,10 +361,26 @@ function EditarPreciosPersonalizados({ tipoEmpresa }) {
                       <>
                         <span style={{ color: '#64748b', fontWeight: 500, background: '#f1f5f9', minWidth: 70, marginRight: 12, padding: '4px 10px', borderRadius: 6 }}>{producto.precio ?? ''}</span>
                         <PriceInputControlado
-                          initialValue={precios[producto.id_producto]?.['default']?.precio ?? ''}
+                          initialValue={precios[producto.id_producto]?.[6]?.precio ?? ''}
                           disabled={false}
-                          onSave={precio => handleGuardar(producto.id_producto, null, precio)}
+                          onSave={precio => handleGuardar(producto.id_producto, -1, precio)}
                         />
+                        <button
+                          onClick={() => handleToggleVenta(producto.id_producto, -1)}
+                          style={{
+                            background: habilitadoPrecios[producto.id_producto]?.[6] !== false ? '#16a34a' : '#ef4444',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: 5,
+                            padding: '6px 12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            fontSize: 14,
+                            marginLeft: 12
+                          }}
+                        >
+                          {habilitadoPrecios[producto.id_producto]?.[6] !== false ? 'Venta habilitada' : 'Venta deshabilitada'}
+                        </button>
                       </>
                     )}
                   </td>
