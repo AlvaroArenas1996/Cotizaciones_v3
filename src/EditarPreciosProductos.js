@@ -47,8 +47,20 @@ function EditarPreciosProductos() {
 
   useEffect(() => {
     const fetchEmpresas = async () => {
-      const { data, error } = await supabase.from('empresas').select('id, nombre, estado');
-      if (!error && data) setEmpresas(data);
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, display_name as nombre, estado_empresa as estado')
+        .eq('role', 'empresa');
+      if (!error && data) {
+        // Mapear el estado_empresa al formato esperado
+        const empresasFormateadas = data.map(emp => ({
+          ...emp,
+          estado: emp.estado === 'Activo' ? 'Habilitada para vender' : 'Deshabilitada para vender'
+        }));
+        setEmpresas(empresasFormateadas);
+      } else if (error) {
+        console.error('Error al cargar empresas:', error);
+      }
     };
     fetchEmpresas();
   }, []);
@@ -95,12 +107,19 @@ function EditarPreciosProductos() {
   const toggleEstadoEmpresa = async (empresaId, estadoActual) => {
     setEmpresaMsg('');
     const nuevoEstado = estadoActual === 'Habilitada para vender' ? 'Deshabilitada para vender' : 'Habilitada para vender';
-    const { error } = await supabase.from('empresas').update({ estado: nuevoEstado }).eq('id', empresaId);
+    const { error } = await supabase
+      .from('profiles')
+      .update({ 
+        estado_empresa: nuevoEstado,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', empresaId);
     if (!error) {
       setEmpresas(empresas.map(e => e.id === empresaId ? { ...e, estado: nuevoEstado } : e));
       setEmpresaMsg('Estado de empresa actualizado');
     } else {
-      setEmpresaMsg('Error al actualizar estado');
+      console.error('Error al actualizar estado de la empresa:', error);
+      setEmpresaMsg('Error al actualizar estado: ' + error.message);
     }
   };
 

@@ -19,18 +19,21 @@ function EmpresaForm({ userId, tipoEmpresa, onSuccess }) {
     console.log('[EmpresaForm] tipoEmpresa:', tipoEmpresa);
     const payload = {
       id: userId,
-      nombre,
+      display_name: nombre,
       rut,
       direccion,
       tipo_empresa: tipoEmpresa,
+      estado_empresa: 'Inactivo', // Estado por defecto
+      role: 'empresa',
+      updated_at: new Date().toISOString()
     };
-    // Elimina nombre_producto si accidentalmente se incluyera
-    delete payload.nombre_producto;
-    console.log('[EmpresaForm] payload a insertar:', payload);
+    
+    console.log('[EmpresaForm] Payload a guardar:', JSON.stringify(payload, null, 2));
+    console.log('[EmpresaForm] payload a insertar en profiles:', payload);
     try {
-      const { data, error, status, statusText } = await supabase.from('empresas').upsert([
-        payload
-      ]);
+      const { data, error, status, statusText } = await supabase
+        .from('profiles')
+        .upsert([payload], { onConflict: 'id' });
       console.log('[EmpresaForm] respuesta supabase:', { data, error, status, statusText });
       setLoading(false);
       if (error) {

@@ -8,7 +8,7 @@ const baseMenuItems = [
 
 const empresaMenu = { icon: '🛠️', label: 'Gestión de productos', role: 'empresa' };
 const insumosMenu = { icon: '📦', label: 'Gestión de insumos', role: 'insumos' };
-const configMenu = { icon: '⚙️', label: 'Configuración' };
+const configMenu = { icon: '⚙️', label: 'Planes' };
 
 export default function Sidebar({ setView, role }) {
   let menuItems = [...baseMenuItems];

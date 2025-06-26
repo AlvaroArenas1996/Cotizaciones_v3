@@ -171,40 +171,93 @@ export default function DetalleNegociacion({ cotizacionId, onVolver, usuario }) 
     );
   }
 
+  // Obtener el rol del usuario actual
+  const userRole = usuario?.user_metadata?.role || '';
+  const isEmpresa = userRole === 'empresa';
+  const isCliente = userRole === 'cliente';
+  const isInsumos = userRole === 'insumos';
+
   return (
-    <div style={{ padding: 40, maxWidth: 750, margin: '0 auto' }}>
-      <button onClick={onVolver} style={{ marginBottom: 24, background: '#eee', border: 'none', borderRadius: 5, padding: '7px 14px', cursor: 'pointer', fontSize: 16 }}>← Volver</button>
+    <div style={{ padding: 40, maxWidth: 1000, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <button onClick={onVolver} style={{ background: '#eee', border: 'none', borderRadius: 5, padding: '7px 14px', cursor: 'pointer', fontSize: 16 }}>← Volver</button>
+        {userRole && (
+          <div style={{ background: '#f0f7ff', padding: '8px 16px', borderRadius: 20, fontSize: 14, color: '#1976d2', fontWeight: 500 }}>
+            Rol: {userRole.charAt(0).toUpperCase() + userRole.slice(1)}
+          </div>
+        )}
+      </div>
       <h2 style={{ fontSize: '1.7rem', fontWeight: 700, color: '#19223a', marginBottom: 20 }}>
         Detalle de Cotización
       </h2>
-      <table style={{ width: '100%', background: '#fff', borderRadius: 10, borderCollapse: 'collapse', boxShadow: '0 1px 8px #0001', marginBottom: 30 }}>
-        <thead>
-          <tr style={{ background: '#f5f7fa' }}>
-            <th style={{ padding: '10px 8px', textAlign: 'left' }}>Producto</th>
-            <th style={{ padding: '10px 8px', textAlign: 'left' }}>Dimensiones</th>
-            <th style={{ padding: '10px 8px', textAlign: 'left' }}>Acción</th>
-          </tr>
-        </thead>
-        <tbody>
-          {productos.map((prod, idx) => (
-            <tr key={prod.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-              <td style={{ padding: 8 }}>{prod.nombre_producto}</td>
-              <td style={{ padding: 8 }}>{prod.ancho} x {prod.alto}</td>
-              <td style={{ padding: 8, minWidth: 180 }}>
-                <button
-                  style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 18px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
+      <div style={{ display: 'flex', gap: 20 }}>
+        <div style={{ flex: 1 }}>
+          <table style={{ width: '100%', background: '#fff', borderRadius: 10, borderCollapse: 'collapse', boxShadow: '0 1px 8px #0001', marginBottom: 30 }}>
+            <thead>
+              <tr style={{ background: '#f5f7fa' }}>
+                <th style={{ padding: '12px 10px', textAlign: 'left' }}>Producto</th>
+                <th style={{ padding: '12px 10px', textAlign: 'left' }}>Dimensiones</th>
+                <th style={{ padding: '12px 10px', textAlign: 'left' }}>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {productos.map((prod, idx) => (
+                <tr 
+                  key={prod.id} 
+                  style={{ 
+                    borderBottom: '1px solid #f0f0f0',
+                    backgroundColor: productoMensajes === prod.id ? '#f8fafc' : 'transparent',
+                    cursor: 'pointer'
+                  }}
                   onClick={() => handleAbrirMensajes(prod.id)}
                 >
-                  Registro de Mensajes
-                </button>
-                <span style={{ marginLeft: 12 }}>
-                  {nuevosMensajes[prod.id] ? <span style={{ color: '#e67e22', fontWeight: 600 }}>Nuevos Mensajes</span> : 'Sin mensajes nuevos'}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                  <td style={{ padding: '12px 10px' }}>{prod.nombre_producto}</td>
+                  <td style={{ padding: '12px 10px' }}>{prod.ancho} x {prod.alto} cm</td>
+                  <td style={{ padding: '12px 10px', minWidth: 200 }}>
+                    <button
+                      style={{ 
+                        background: '#1976d2', 
+                        color: '#fff', 
+                        border: 'none', 
+                        borderRadius: 5, 
+                        padding: '6px 18px', 
+                        fontWeight: 600, 
+                        fontSize: 15, 
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap'
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAbrirMensajes(prod.id);
+                      }}
+                    >
+                      {productoMensajes === prod.id ? 'Mensajes activos' : 'Ver mensajes'}
+                    </button>
+                    <span style={{ marginLeft: 12, fontSize: 14, color: nuevosMensajes[prod.id] ? '#e67e22' : '#666' }}>
+                      {nuevosMensajes[prod.id] ? 'Nuevos mensajes' : 'Sin mensajes nuevos'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        
+        {/* Panel de mensajes */}
+        {productoMensajes && (
+          <div style={{ width: '45%', background: '#fff', borderRadius: 10, boxShadow: '0 1px 8px #0001', padding: 20, alignSelf: 'flex-start' }}>
+            <h3 style={{ marginTop: 0, marginBottom: 20, color: '#19223a' }}>
+              Chat del producto
+            </h3>
+            <HistorialMensajesProducto 
+              cotizacionId={cotizacionId}
+              cotizacionDetalleId={productoMensajes}
+              onVolver={() => setProductoMensajes(null)}
+              usuario={usuario}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

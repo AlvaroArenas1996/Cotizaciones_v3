@@ -15,9 +15,9 @@ function ResponderCotizaciones() {
       setError('');
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user?.id) return;
-      // Solo empresas
-      const { data: empresa } = await supabase.from('empresas').select('id').eq('id', session.user.id).single();
-      if (!empresa) {
+      // Verificar si el usuario es una empresa
+      const { data: empresa } = await supabase.from('profiles').select('id, role').eq('id', session.user.id).single();
+      if (!empresa || empresa.role !== 'empresa') {
         setError('Solo empresas pueden responder cotizaciones');
         setLoading(false);
         return;
@@ -111,9 +111,9 @@ function ResponderCotizaciones() {
     setError('');
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user?.id) return;
-    // Solo empresas
-    const { data: empresa } = await supabase.from('empresas').select('id').eq('id', session.user.id).single();
-    if (!empresa) {
+    // Verificar si el usuario es una empresa
+    const { data: empresa } = await supabase.from('profiles').select('id, role').eq('id', session.user.id).single();
+    if (!empresa || empresa.role !== 'empresa') {
       setError('Solo empresas pueden responder cotizaciones');
       return;
     }

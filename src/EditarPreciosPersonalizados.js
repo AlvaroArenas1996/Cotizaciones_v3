@@ -36,18 +36,19 @@ function EditarPreciosPersonalizados({ tipoEmpresa }) {
         return;
       }
       setEmpresaId(session.user.id);
-      // Nombre empresa
-      const { data: empresaData, error: empresaError } = await supabase
-        .from('empresas')
-        .select('nombre')
+      // Nombre empresa desde profiles
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('display_name')
         .eq('id', session.user.id)
         .single();
-      if (empresaError || !empresaData) {
+      if (profileError || !profileData) {
+        console.error('Error al obtener perfil de empresa:', profileError);
         setError('No se pudo obtener el nombre de la empresa');
         setLoading(false);
         return;
       }
-      setNombreEmpresa(empresaData.nombre);
+      setNombreEmpresa(profileData.display_name || 'Empresa sin nombre');
       // Productos
       const { data: productosData, error: prodError } = await supabase.from('productos').select('*');
       if (prodError) {

@@ -34,24 +34,33 @@ export default function HistorialMensajesProducto({ cotizacionId, cotizacionDeta
       // Obtén todos los usuario_id únicos de los mensajes
       const ids = [...new Set(mensajes.map(m => m.usuario_id).filter(Boolean))];
       if (ids.length === 0) return;
-      // Buscar en profiles y empresas (sin 'nombre', solo campos existentes)
-      const { data: perfiles } = await supabase.from('profiles').select('id, display_name, email').in('id', ids);
-      const { data: empresas } = await supabase.from('empresas').select('id, nombre').in('id', ids);
+      // Buscar en profiles (incluyendo empresas)
+      const { data: perfiles } = await supabase
+        .from('profiles')
+        .select('id, display_name, email, role')
+        .in('id', ids);
+      
       // Si falta email, buscarlo en auth.users
       let emailsAuth = {};
       const missingEmailIds = perfiles ? perfiles.filter(p => !(p.email)).map(p => p.id) : [];
       if (missingEmailIds.length > 0) {
-        const { data: authUsers } = await supabase.schema('auth').from('users').select('id, email').in('id', missingEmailIds);
+        const { data: authUsers } = await supabase
+          .schema('auth')
+          .from('users')
+          .select('id, email')
+          .in('id', missingEmailIds);
         if (authUsers) {
           authUsers.forEach(u => { emailsAuth[u.id] = u.email; });
         }
       }
+      
       // Construir mapa id -> display_name/email
       const info = {};
-      if (perfiles) perfiles.forEach(p => {
-        info[p.id] = p.display_name || p.email || emailsAuth[p.id] || p.id;
-      });
-      if (empresas) empresas.forEach(e => { info[e.id] = e.nombre || e.id; });
+      if (perfiles) {
+        perfiles.forEach(p => {
+          info[p.id] = p.display_name || p.email || emailsAuth[p.id] || p.id;
+        });
+      }
       setUsuariosInfo(info);
     }
     fetchUsuarios();

@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useSnackbar } from 'notistack';
 import { supabase } from './supabaseClient';
 
 function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva, handleIrANegociacion }) {
+  const { enqueueSnackbar } = useSnackbar();
   const [cotizaciones, setCotizaciones] = useState([]);
   const [detalles, setDetalles] = useState({});
   const [productosInfo, setProductosInfo] = useState({});
@@ -50,21 +52,160 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
       if (!session?.user?.id) throw new Error('No autenticado');
       let cotizacionesData = [], ventasArr = [], detallesObj = {}, respuestasObj = {}, empresaIds = new Set();
       if (role === 'empresa') {
-        // Empresas: ver cotizaciones asignadas (ventas donde empresa_id = usuario.id)
+        // Empresas: ver cotizaciones donde su oferta fue aceptada (ventas donde empresa_id = usuario.id)
+        // Primero obtenemos las ventas de la empresa
         const { data: ventasDataRaw, error: ventasError } = await supabase
           .from('ventas')
-          .select('*, cotizaciones(*, respuestas_cotizacion(*), cotizacion_detalle(*))')
+          .select(`
+            *,
+            cotizaciones (
+              *,
+              cliente:profiles!cotizaciones_cliente_id_fkey(id, display_name, email),
+              cotizacion_detalle(*, producto:productos(id_producto, nombre_producto)),
+              respuestas_cotizacion!cotizacion_id(*)
+            )
+          `)
           .eq('empresa_id', session.user.id);
-        ventasArr = ventasDataRaw || [];
-        cotizacionesData = ventasArr.map(v => v.cotizaciones).filter(Boolean);
-        // Procesar detalles y respuestas
-        for (const v of ventasArr) {
-          if (v.cotizaciones) {
-            detallesObj[v.cotizaciones.id] = v.cotizaciones.cotizacion_detalle || [];
-            respuestasObj[v.cotizaciones.id] = v.cotizaciones.respuestas_cotizacion || [];
-            (v.cotizaciones.respuestas_cotizacion || []).forEach(r => empresaIds.add(r.empresa_id));
+        
+        console.log('Ventas encontradas para la empresa:', ventasDataRaw);
+        
+        // Si no hay ventas, intentamos obtener las respuestas de cotización directamente
+        if ((!ventasDataRaw || ventasDataRaw.length === 0) && !ventasError) {
+          console.log('No se encontraron ventas, buscando respuestas de cotización...');
+          const { data: respuestasData, error: respuestasError } = await supabase
+            .from('respuestas_cotizacion')
+            .select(`
+              *,
+              cotizaciones!inner(
+                *,
+                cliente:profiles!cotizaciones_cliente_id_fkey(id, display_name, email),
+                cotizacion_detalle(*, producto:productos(id_producto, nombre_producto))
+              )
+            `)
+            .eq('empresa_id', session.user.id);
+            
+          if (respuestasError) {
+            console.error('Error al cargar respuestas de cotización:', respuestasError);
+            throw respuestasError;
+          }
+          
+          if (respuestasData && respuestasData.length > 0) {
+            console.log('Respuestas de cotización encontradas:', respuestasData);
+            
+            // Procesar las respuestas
+            respuestasData.forEach(respuesta => {
+              if (respuesta.cotizaciones) {
+                const cotizacion = respuesta.cotizaciones;
+                const cotizacionId = cotizacion.id;
+                
+                // Agregar a cotizacionesData si no está ya incluida
+                if (!cotizacionesData.some(c => c.id === cotizacionId)) {
+                  cotizacionesData.push({
+                    ...cotizacion,
+                    // Asegurarse de que los campos requeridos estén presentes
+                    cliente: cotizacion.cliente || {},
+                    cotizacion_detalle: Array.isArray(cotizacion.cotizacion_detalle) 
+                      ? cotizacion.cotizacion_detalle 
+                      : []
+                  });
+                }
+                
+                // Procesar detalles
+                if (cotizacion.cotizacion_detalle) {
+                  detallesObj[cotizacionId] = Array.isArray(cotizacion.cotizacion_detalle) 
+                    ? cotizacion.cotizacion_detalle 
+                    : [];
+                }
+                
+                // Procesar respuestas
+                if (!respuestasObj[cotizacionId]) {
+                  respuestasObj[cotizacionId] = [];
+                }
+                
+                // Asegurarse de que la respuesta tenga los campos requeridos
+                const respuestaProcesada = {
+                  ...respuesta,
+                  empresa_id: respuesta.empresa_id || session.user.id,
+                  estado: respuesta.estado || 'pendiente',
+                  monto: respuesta.monto || 0
+                };
+                
+                respuestasObj[cotizacionId].push(respuestaProcesada);
+                
+                // Agregar ID de empresa
+                if (respuesta.empresa_id) {
+                  empresaIds.add(respuesta.empresa_id);
+                }
+              }
+            });
+            
+            console.log('Datos procesados:', {
+              cotizaciones: cotizacionesData.length,
+              detalles: Object.keys(detallesObj).length,
+              respuestas: Object.keys(respuestasObj).length,
+              empresas: empresaIds.size,
+              cotizacionesData,
+              detallesObj,
+              respuestasObj
+            });
+          }
+          
+          // Asignar los datos procesados a los arrays principales
+          ventasArr = []; // No hay ventas, solo respuestas
+        } else if (ventasError) {
+          console.error('Error al cargar ventas:', ventasError);
+          throw ventasError;
+        } else {
+          // Procesar ventas si las hay
+          ventasArr = Array.isArray(ventasDataRaw) ? ventasDataRaw : [];
+          cotizacionesData = ventasArr
+            .map(v => v.cotizaciones)
+            .filter(Boolean)
+            .map(cot => ({
+              ...cot,
+              cotizacion_detalle: Array.isArray(cot.cotizacion_detalle) 
+                ? cot.cotizacion_detalle 
+                : []
+            }));
+          
+          // Procesar detalles y respuestas de ventas
+          for (const v of ventasArr) {
+            if (v.cotizaciones) {
+              const cotizacionId = v.cotizaciones.id;
+              detallesObj[cotizacionId] = Array.isArray(v.cotizaciones.cotizacion_detalle) 
+                ? v.cotizaciones.cotizacion_detalle 
+                : [];
+                
+              respuestasObj[cotizacionId] = Array.isArray(v.cotizaciones.respuestas_cotizacion)
+                ? v.cotizaciones.respuestas_cotizacion
+                : [];
+              
+              if (v.cotizaciones.cliente) {
+                cotizacionesData = cotizacionesData.map(cot => 
+                  cot.id === cotizacionId 
+                    ? { ...cot, cliente: v.cotizaciones.cliente }
+                    : cot
+                );
+              }
+              
+              const respuestas = Array.isArray(v.cotizaciones.respuestas_cotizacion) 
+                ? v.cotizaciones.respuestas_cotizacion 
+                : [];
+                
+              respuestas.forEach(r => {
+                if (r.empresa_id) empresaIds.add(r.empresa_id);
+              });
+            }
           }
         }
+        
+        console.log('Cotizaciones cargadas para empresa:', {
+          ventas: ventasArr.length,
+          cotizaciones: cotizacionesData.length,
+          detalles: Object.keys(detallesObj).length,
+          respuestas: Object.keys(respuestasObj).length,
+          empresas: empresaIds.size
+        });
       } else {
         // Clientes: igual que antes
         const { count } = await supabase
@@ -125,19 +266,31 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
         productosData?.forEach(p => { info[p.id_producto] = p.nombre_producto; });
         setProductosInfo(info);
       }
-      setCotizaciones(cotizacionesData || []);
-      setVentas(ventasArr);
-      setDetalles(detallesObj);
-      setRespuestas(respuestasObj);
-      // Obtener nombres de empresas
+      
+      // Asegurarse de que los datos sean arrays
+      const cotizacionesFinal = Array.isArray(cotizacionesData) ? cotizacionesData : [];
+      const ventasFinal = Array.isArray(ventasArr) ? ventasArr : [];
+      
+      setCotizaciones(cotizacionesFinal);
+      setVentas(ventasFinal);
+      setDetalles(detallesObj || {});
+      setRespuestas(respuestasObj || {});
+      // Obtener nombres de perfiles de empresa
       if (empresaIds.size > 0) {
-        const { data: empresasData } = await supabase
-          .from('empresas')
-          .select('id, nombre')
+          const { data: perfilesData, error: perfilesError } = await supabase
+          .from('profiles')
+          .select('id, display_name, email')
           .in('id', Array.from(empresaIds));
-        const empresasMap = {};
-        empresasData?.forEach(e => { empresasMap[e.id] = e.nombre; });
-        setEmpresasInfo(empresasMap);
+        
+        if (!perfilesError && perfilesData) {
+          const empresasMap = {};
+          perfilesData.forEach(e => { 
+            // Usar display_name si existe, si no, usar la parte del email antes del @, si no, usar parte del ID
+            const nombre = e.display_name || (e.email ? e.email.split('@')[0] : `Empresa ${e.id.substring(0, 6)}`);
+            empresasMap[e.id] = nombre; 
+          });
+          setEmpresasInfo(empresasMap);
+        }
       }
     } catch (e) {
       setCotizaciones([]);
@@ -227,49 +380,178 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
 
   // --- Acciones para aceptar/rechazar ofertas ---
   const handleAceptarOferta = async (empresaId) => {
-    if (!modalOfertas.cotizacion) return;
+    if (!modalOfertas.cotizacion) {
+      alert('No se encontró la cotización');
+      return;
+    }
+    
     try {
-      // 1. Asignar la seleccionada
-      const { data: respuestasAsignadas, error: errorAsignada } = await supabase.from('respuestas_cotizacion')
-        .update({ estado: 'asignada' })
+      // 1. Verificar que la empresa existe y es de tipo 'empresa'
+      
+      // Primero verificar en la tabla profiles
+              const { data: empresa, error: errorEmpresa } = await supabase
+                .from('profiles')
+                .select('id, role, email, display_name')
+                .eq('id', empresaId)
+                .single();
+      
+      if (errorEmpresa || !empresa) {
+        console.error('Error al verificar la empresa en profiles:', errorEmpresa);
+        throw new Error('La empresa no existe en el sistema');
+      }
+
+      // Verificar que el perfil sea de tipo 'empresa'
+      if (empresa.role !== 'empresa') {
+        throw new Error('El perfil seleccionado no es una empresa válida');
+      }
+
+      // 1. Usar la función RPC para obtener o crear la empresa
+      const { data: empresaData, error: rpcError } = await supabase
+        .rpc('get_or_create_empresa', {
+          p_profile_id: empresaId,
+          p_nombre: empresa.display_name || 'Nueva Empresa',
+          p_rut: '',
+          p_direccion: '',
+          p_tipo_empresa: 'publicidad'
+        });
+
+      if (rpcError) {
+        console.error('Error en get_or_create_empresa:', rpcError);
+        throw new Error(`No se pudo verificar/crear la empresa: ${rpcError.message}`);
+      }
+
+      // 2. Asignar la oferta seleccionada
+      const { data: respuestasAsignadas, error: errorAsignada } = await supabase
+        .from('respuestas_cotizacion')
+        .update({ 
+          estado: 'asignada'
+        })
         .eq('cotizacion_id', modalOfertas.cotizacion.id)
         .eq('empresa_id', empresaId)
         .select('*');
+      
       if (errorAsignada || !respuestasAsignadas || respuestasAsignadas.length === 0) {
-        alert('Error al asignar oferta');
-        return;
+        console.error('Error al asignar oferta:', errorAsignada);
+        throw new Error('No se pudo asignar la oferta. Por favor, inténtalo de nuevo.');
       }
+      
       const respuestaAsignada = respuestasAsignadas[0];
-      // 2. Rechazar todas las demás
-      const rechazarRes = await supabase.from('respuestas_cotizacion')
-        .update({ estado: 'rechazada' })
+      
+      // 3. Rechazar las demás ofertas
+      const { error: errorRechazarOtras } = await supabase
+        .from('respuestas_cotizacion')
+        .update({ 
+          estado: 'rechazada'
+        })
         .eq('cotizacion_id', modalOfertas.cotizacion.id)
         .neq('empresa_id', empresaId);
-      // 3. Insertar registro en la tabla de ventas
-      const monto_total = respuestaAsignada?.monto || 0;
-      const comision = Math.round(monto_total * 0.02); // 5% de comisión ejemplo
-      const monto_empresa = monto_total - comision;
-      const ventaRes = await supabase.from('ventas').insert([
+      
+      if (errorRechazarOtras) {
+        console.error('Error al rechazar otras ofertas:', errorRechazarOtras);
+        // No detenemos el flujo por este error, solo lo registramos
+      }
+      
+      // 4. Insertar o actualizar el registro de venta
+      const { data: ventaExistente, error: errorBuscarVenta } = await supabase
+        .from('ventas')
+        .select('*')
+        .eq('cotizacion_id', modalOfertas.cotizacion.id)
+        .maybeSingle();
+      
+      const ventaData = {
+        cotizacion_id: modalOfertas.cotizacion.id,
+        empresa_id: empresaId,
+        respuesta_id: respuestaAsignada.id,
+        monto_total: respuestaAsignada.monto,
+        monto_comision: respuestaAsignada.monto * 0.02, // 2% de comisión
+        monto_empresa: respuestaAsignada.monto * 0.98, // 98% para la empresa
+        estado: 'pendiente'
+        // Nota: Se eliminó created_at ya que no existe en la tabla
+      };
+
+      let venta;
+      if (ventaExistente) {
+        // Actualizar venta existente
+        const { data: ventaActualizada, error: errorActualizar } = await supabase
+          .from('ventas')
+          .update(ventaData)
+          .eq('id', ventaExistente.id)
+          .select()
+          .single();
+          
+        if (errorActualizar) throw errorActualizar;
+        venta = ventaActualizada;
+      } else {
+        // Crear nueva venta
+        const { data: nuevaVenta, error: errorNuevaVenta } = await supabase
+          .from('ventas')
+          .insert([ventaData])
+          .select()
+          .single();
+          
+        if (errorNuevaVenta) throw errorNuevaVenta;
+        venta = nuevaVenta;
+      }
+      
+      console.log('Venta creada/actualizada:', venta);
+      
+      // 5. Actualizar el estado de la cotización
+      const { error: errorActualizarEstado } = await supabase
+        .from('cotizaciones')
+        .update({ 
+          estado: 'asignada'
+        })
+        .eq('id', modalOfertas.cotizacion.id);
+      
+      if (errorActualizarEstado) {
+        console.error('Error al actualizar estado de cotización:', errorActualizarEstado);
+        // Continuamos a pesar del error
+      }
+      
+      // Actualizar el estado local para reflejar los cambios
+      setCotizaciones(prevCotizaciones => 
+        prevCotizaciones.map(cotizacion => 
+          cotizacion.id === modalOfertas.cotizacion.id 
+            ? { ...cotizacion, estado: 'asignada' } 
+            : cotizacion
+        )
+      );
+      
+      // Actualizar respuestas locales
+      setRespuestas(prevRespuestas => ({
+        ...prevRespuestas,
+        [modalOfertas.cotizacion.id]: (
+          prevRespuestas[modalOfertas.cotizacion.id] || []
+        ).map(respuesta => ({
+          ...respuesta,
+          estado: respuesta.empresa_id === empresaId ? 'asignada' : 'rechazada'
+        }))
+      }));
+      
+      // Actualizar el estado de ventas local
+      setVentas(prevVentas => [
+        ...prevVentas.filter(v => v.cotizacion_id !== modalOfertas.cotizacion.id),
         {
-          cotizacion_id: modalOfertas.cotizacion.id,
-          empresa_id: empresaId,
-          monto_total,
-          monto_empresa,
-          monto_comision: comision,
-          estado: 'pendiente',
-          respuesta_id: respuestaAsignada?.id || null
+          ...ventaData,
+          id: venta?.id || 'temp-' + Date.now(), // Usar ID temporal si no existe
+          empresa: empresa, // Asegurarse de incluir la información de la empresa
+          respuesta: respuestaAsignada // Incluir la respuesta completa
         }
       ]);
-      if (ventaRes.error) {
-        alert('Error al registrar la venta: ' + ventaRes.error.message);
-        return;
-      }
-      setModalOfertas({ abierto: false, cotizacion: null, precios: {} });
-      setTimeout(() => {
-        fetchCotizaciones();
-      }, 400);
-    } catch (e) {
-      alert('Error inesperado al aceptar la oferta');
+      
+      // Cerrar el modal después de todo
+      setModalOfertas({ abierto: false, cotizacion: null, precios: {}, detalleAsignada: null, expandida: null });
+      
+      // Mostrar mensaje de éxito
+      enqueueSnackbar('¡Oferta aceptada exitosamente!', { variant: 'success' });
+      
+      // Recargar los datos para asegurar consistencia
+      fetchCotizaciones();
+    } catch (error) {
+      console.error('Error en handleAceptarOferta:', error);
+      enqueueSnackbar(`Error al aceptar la oferta: ${error.message}`, { variant: 'error' });
+    } finally {
+      setLoading(false);
     }
   };
   const handleRechazarOferta = async (empresaId) => {
@@ -443,13 +725,37 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
       await supabase.from('cotizaciones')
         .update({ estado: 'publicado' })
         .eq('id', cot.id);
-      // 2. Buscar empresas de publicidad
-      const { data: empresasPublicidad } = await supabase
-        .from('empresas')
-        .select('id, tipo_empresa, estado')
-        .ilike('tipo_empresa', '%publicidad%');
-      // 3. Filtrar solo empresas habilitadas
-      const empresasHabilitadas = (empresasPublicidad || []).filter(e => e.estado === 'Habilitada para vender');
+      // 2. Obtener todas las empresas (con role = 'empresa')
+      console.log('Buscando empresas...');
+      const { data: perfilesEmpresas, error: errorEmpresas } = await supabase
+        .from('profiles')
+        .select('id, estado_empresa, display_name, updated_at')
+        .eq('role', 'empresa');
+      
+      if (errorEmpresas) {
+        console.error('Error al buscar empresas:', errorEmpresas);
+        throw errorEmpresas;
+      }
+      
+      console.log('Todas las empresas encontradas:', perfilesEmpresas);
+      
+      // 3. Filtrar empresas habilitadas
+      const empresasHabilitadas = (perfilesEmpresas || []).filter(e => {
+        // Verificar estado (si no tiene estado_empresa, asumir que está activa)
+        const estaActiva = (e.estado_empresa || 'Activo') === 'Activo';
+        return estaActiva;
+      });
+      
+      console.log('Empresas habilitadas encontradas:', empresasHabilitadas);
+      
+      // 4. Verificar si hay empresas habilitadas
+      if (!empresasHabilitadas.length) {
+        console.log('No hay empresas habilitadas para cotizar');
+        alert('No hay empresas habilitadas para vender. No se realizará cotización automática.');
+        setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: false } : c));
+        return;
+      }
+      
       if (!empresasHabilitadas.length) {
         alert('No hay empresas habilitadas para vender. No se realizará cotización automática.');
         setCotizaciones(prev => prev.map(c => c.id === cot.id ? { ...c, publicando: false } : c));
@@ -487,15 +793,65 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
           montoTotal += ((Number(det.alto) * Number(det.ancho)) / 10000) * precio;
         }
         if (puedeCotizar) {
-          await supabase.from('respuestas_cotizacion').insert([
-            {
+          try {
+            // Verificar si la empresa existe en la tabla profiles
+            const { data: empresaExistente, error: errorEmpresa } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('id', empresa.id)
+              .single();
+
+            if (errorEmpresa || !empresaExistente) {
+              console.error('La empresa no existe en la tabla profiles:', empresa.id);
+              continue;
+            }
+
+            // Verificar si ya existe una respuesta para esta empresa y cotización
+            const { data: respuestaExistente, error: consultaError } = await supabase
+              .from('respuestas_cotizacion')
+              .select('id')
+              .eq('cotizacion_id', cot.id)
+              .eq('empresa_id', empresa.id)
+              .maybeSingle();
+
+            if (consultaError) {
+              console.error('Error al verificar respuesta existente:', consultaError);
+              continue;
+            }
+
+            const respuestaData = {
               cotizacion_id: cot.id,
-              empresa_id: empresa.id,
+              empresa_id: empresa.id,  // Este ID ya está verificado que existe en profiles
               monto: Math.round(montoTotal),
               fecha: new Date().toISOString(),
               estado: 'pendiente'
+            };
+
+            if (respuestaExistente) {
+              // Si existe, actualizamos
+              const { error: updateError } = await supabase
+                .from('respuestas_cotizacion')
+                .update(respuestaData)
+                .eq('id', respuestaExistente.id);
+
+              if (updateError) throw updateError;
+            } else {
+              // Si no existe, insertamos
+
+              const { error: insertError } = await supabase
+                .from('respuestas_cotizacion')
+                .insert([respuestaData]);
+
+              if (insertError) {
+                console.error('Error al insertar respuesta:', insertError);
+                throw insertError;
+              }
             }
-          ]);
+          } catch (error) {
+            console.error('Error al guardar respuesta de cotización:', error);
+            // Continuar con la siguiente empresa en caso de error
+            continue;
+          }
         }
       }
     } finally {
@@ -509,40 +865,59 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
 
   return (
     <div>
-      <h2 style={{ fontSize: '1.8rem', fontWeight: 400, color: '#19223a', marginBottom: 16 }}>Historial de Cotizaciones</h2>
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16 }}>
-        <thead>
-          <tr>
-            <th>Cotización</th>
-            <th>Asignada</th>
-            <th>Venta</th>
-            <th>Monto asignado</th>
-            <th>Acciones</th>
-            <th>Mensajes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cotizaciones.map(cot => {
-            const respuestasCot = respuestas[cot.id] || [];
-            const ofertaAsignada = respuestasCot.find(r => r.estado === 'asignada');
-            // Debe mostrar "COT. Rechazadas" si NO hay respuestas para esa cotización (todas eliminadas)
-            const todasRechazadas = respuestasCot.length === 0 || (respuestasCot.length > 0 && respuestasCot.every(r => r.estado === 'rechazada'));
-            const venta = ventas.find(v => v.cotizacion_id === cot.id);
-            // Buscar monto de la empresa asignada
-            let montoAsignado = '-';
-            if (ofertaAsignada) {
-              montoAsignado = ofertaAsignada.monto !== undefined && ofertaAsignada.monto !== null
-                ? ofertaAsignada.monto.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
-                : '-';
-            }
-            // NUEVO: Mostrar "Sin publicar" si la cotización no está publicada
+      <h2 style={{ fontSize: '1.8rem', fontWeight: 400, color: '#19223a', marginBottom: 16 }}>
+        {role === 'empresa' ? 'Cotizaciones Asignadas' : 'Historial de Cotizaciones'}
+      </h2>
+      
+      {role === 'empresa' && cotizaciones.length === 0 ? (
+        <div style={{ margin: '20px 0', padding: '20px', backgroundColor: '#f8f9fa', borderRadius: '4px', textAlign: 'center' }}>
+          No tienes cotizaciones asignadas actualmente.
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 16, minWidth: '800px' }}>
+            <thead>
+              <tr>
+                <th>Cotización</th>
+                {role === 'cliente' && <th>Asignada</th>}
+                <th>Venta</th>
+                <th>Monto asignado</th>
+                <th>Acciones</th>
+                <th>Mensajes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cotizaciones.map(cot => {
+                const respuestasCot = Array.isArray(respuestas[cot.id]) ? respuestas[cot.id] : [];
+                const ventaCotizacion = Array.isArray(ventas) ? ventas.find(v => v.cotizacion_id === cot.id) : null;
+                const ofertaAsignada = respuestasCot.find(r => r.estado === 'asignada');
+                
+                // Mostrar "COT. Rechazadas" si no hay respuestas o todas están rechazadas
+                const todasRechazadas = respuestasCot.length === 0 || 
+                  (respuestasCot.length > 0 && respuestasCot.every(r => r.estado === 'rechazada'));
+                
+                const venta = Array.isArray(ventas) ? ventas.find(v => v.cotizacion_id === cot.id) : null;
+                
+                // Buscar monto de la empresa asignada
+                let montoAsignado = '-';
+                if (ofertaAsignada) {
+                  montoAsignado = ofertaAsignada.monto !== undefined && ofertaAsignada.monto !== null
+                    ? ofertaAsignada.monto.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', minimumFractionDigits: 0 })
+                    : '-';
+                }
+            // Mostrar el estado de la asignación de la cotización
             let estadoAsignada = null;
             if (cot.estado === 'pendiente' || cot.estado === 'borrador' || cot.estado === 'pendiente a publicar') {
               estadoAsignada = <span style={{ color: '#888' }}>Sin publicar</span>;
             } else if (ofertaAsignada) {
-              estadoAsignada = <span style={{ color: '#43c463', fontWeight: 600 }}>{empresasInfo[ofertaAsignada.empresa_id] || ofertaAsignada.empresa_id}</span>;
+              const nombreEmpresa = empresasInfo[ofertaAsignada.empresa_id];
+              estadoAsignada = (
+                <span style={{ color: '#43c463', fontWeight: 600 }}>
+                  {nombreEmpresa || `Empresa (${ofertaAsignada.empresa_id.substring(0, 6)}...)`}
+                </span>
+              );
             } else if (todasRechazadas) {
-              estadoAsignada = <span style={{ color: '#e74c3c', fontWeight: 600 }}>COT. Rechazadas</span>;
+              estadoAsignada = <span style={{ color: '#e74c3c', fontWeight: 600 }}>Rechazadas</span>;
             } else {
               estadoAsignada = <span style={{ color: '#888' }}>Sin asignar</span>;
             }
@@ -563,29 +938,28 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                   {montoAsignado}
                 </td>
                 <td style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {venta && venta.estado === 'pendiente' ? (
+                  {ofertaAsignada ? (
+                    <button
+                      style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 12px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
+                      onClick={() => abrirDetalleAsignada(cot, ofertaAsignada)}
+                    >
+                      Ver Cotización
+                    </button>
+                  ) : venta && venta.estado === 'pendiente' ? (
                     <button
                       style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 12px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
                       onClick={() => handleIrANegociacion(venta, cot, empresasInfo[ofertaAsignada?.empresa_id] ? { id: ofertaAsignada?.empresa_id, nombre: empresasInfo[ofertaAsignada.empresa_id] } : null)}
                     >
                       Interactuar con la Empresa
                     </button>
-                  ) : ofertaAsignada ? (
-                    <button
-                      style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 12px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
-                      onClick={() => abrirDetalleAsignada(cot, ofertaAsignada)}
-                    >
-                      Ver cotización
-                    </button>
-                  ) : cot.estado === 'publicado' && (
+                  ) : cot.estado === 'publicado' ? (
                     <button
                       style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 12px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
                       onClick={() => setModalOfertas({ abierto: true, cotizacion: cot, precios: {} })}
                     >
                       Ver cotizaciones de empresas
                     </button>
-                  )}
-                  {cot.estado === 'pendiente a publicar' && (
+                  ) : cot.estado === 'pendiente a publicar' && (
                     <button
                       style={{ background: '#1976d2', color: '#fff', border: 'none', borderRadius: 5, padding: '6px 12px', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
                       disabled={cot.publicando}
@@ -596,15 +970,44 @@ function HistorialCotizaciones({ recargarTrigger, setView, setNegociacionActiva,
                   )}
                 </td>
                 <td>
-                  {tieneMensajesNuevosEnCotizacion(cot.id)
-                    ? <span style={{ color: '#e67e22', fontWeight: 600 }}>Nuevos Mensajes</span>
-                    : 'Sin mensajes nuevos'}
+                  {ofertaAsignada && (
+                    <button
+                      onClick={() => handleIrANegociacion(venta || { cotizacion_id: cot.id }, cot, { id: ofertaAsignada.empresa_id, nombre: empresasInfo[ofertaAsignada.empresa_id] })}
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid #1976d2',
+                        color: '#1976d2',
+                        borderRadius: 5,
+                        padding: '6px 12px',
+                        fontWeight: 600,
+                        fontSize: 14,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        whiteSpace: 'nowrap',
+                        margin: '0 auto'
+                      }}
+                      title="Ver y enviar mensajes"
+                    >
+                      {tieneMensajesNuevosEnCotizacion(cot.id) ? (
+                        <>
+                          <span style={{ color: '#e67e22' }}>●</span>
+                          <span>Nuevos mensajes</span>
+                        </>
+                      ) : (
+                        <span>Ver mensajes</span>
+                      )}
+                    </button>
+                  )}
                 </td>
               </tr>
             );
-          })}
-        </tbody>
-      </table>
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
       {/* Paginación de cotizaciones */}
       {totalCotizaciones > cotizacionesPorPagina && (
         <div style={{ display: 'flex', justifyContent: 'center', gap: 10, margin: '16px 0' }}>

@@ -13,8 +13,9 @@ export default function ListadoOfertasCotizacion({ cotizacionId, detalles, onAce
       setError('');
       // Obtener empresas de publicidad grafica
       const { data: empresas, error: empresasError } = await supabase
-        .from('empresas')
-        .select('id, nombre')
+        .from('profiles')
+        .select('id, display_name as nombre')
+        .eq('role', 'empresa')
         .eq('tipo_empresa', 'publicidad');
       if (empresasError) {
         setError('No se pudieron obtener las empresas');

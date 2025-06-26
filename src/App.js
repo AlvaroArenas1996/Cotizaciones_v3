@@ -121,17 +121,15 @@ function App() {
     const setEmpresaId = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user?.id) {
-        // Buscar empresa cuyo id coincida con el usuario
-        const { data: empresa, error } = await supabase
-          .from('empresas')
-          .select('id')
+        // Buscar en profiles donde el id coincida con el usuario y el rol sea 'empresa'
+        const { data: perfil, error } = await supabase
+          .from('profiles')
+          .select('id, role')
           .eq('id', session.user.id)
           .single();
-        if (empresa && empresa.id) {
-          localStorage.setItem('empresa_id', empresa.id);
-          console.log('[App] empresa_id guardado en localStorage', empresa.id);
-        } else {
-          console.warn('[App] No se encontró empresa para este usuario.', error);
+          
+        if (perfil && perfil.id && perfil.role === 'empresa') {
+          localStorage.setItem('empresa_id', perfil.id);
         }
       }
     };
@@ -170,7 +168,7 @@ function App() {
         )}
       </div>
       {view === 'home' || view === 'Inicio' ? <Home /> : null}
-      {view === 'Configuración' && <UserRoleSwitcher onRoleChange={handleRoleChange} />}
+      {view === 'Planes' && <UserRoleSwitcher onRoleChange={handleRoleChange} />}
       {/* Portal de cotizaciones contiene todo el flujo de interacción */}
       {view === 'Portal de cotizaciones' && (
         <Cotizaciones setView={setView} setNegociacionActiva={setNegociacionActiva} />
